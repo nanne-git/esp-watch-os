@@ -744,6 +744,8 @@ static void power_btn(lv_event_t *e)
     } else if (which == 2) {
         ui_confirm("Power off", "Turn the watch off? Press the PWR button to turn it on again.",
                    "Power off", UI_RED, do_poweroff, NULL);
+    } else if (which == 3) {
+        ui_sleep();
     }
 }
 
