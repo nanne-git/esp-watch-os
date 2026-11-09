@@ -27,10 +27,24 @@
 
 #include "esp_http_server.h"
 #include "esp_log.h"
+#include "esp_random.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "esp_timer.h"
 #include "lwip/sockets.h"
 #include "file_manager.h"
 #include "ui.h"
+#include "alarm.h"
+#include "ble_svc.h"
+#include "cJSON.h"
+#include "esp_app_desc.h"
+#include "esp_heap_caps.h"
+#include "hw.h"
+#include "mbedtls/base64.h"
+#include "ota.h"
+#include "phone.h"
+#include "settings.h"
+#include "wifi_svc.h"
 
 static const char *TAG = "WEB";
 
@@ -435,6 +449,295 @@ static esp_err_t api_input(httpd_req_t *req)
     return send_ok(req);
 }
 
+
+/* ------------------------------------------------------------------ JSON helpers */
+
+static char *read_body(httpd_req_t *req, size_t max)
+{
+    if (req->content_len == 0 || req->content_len > max) {
+        return NULL;
+    }
+    char *b = malloc(req->content_len + 1);
+    size_t got = 0;
+    while (b && got < req->content_len) {
+        int r = httpd_req_recv(req, b + got, req->content_len - got);
+        if (r <= 0) {
+            if (r == HTTPD_SOCK_ERR_TIMEOUT) continue;
+            free(b);
+            return NULL;
+        }
+        got += r;
+    }
+    if (b) b[got] = '\0';
+    return b;
+}
+
+static esp_err_t send_cjson(httpd_req_t *req, cJSON *o)
+{
+    char *txt = cJSON_PrintUnformatted(o);
+    cJSON_Delete(o);
+    httpd_resp_set_type(req, "application/json");
+    esp_err_t err = httpd_resp_sendstr(req, txt ? txt : "{}");
+    cJSON_free(txt);
+    return err;
+}
+
+/* ------------------------------------------------------------------ device status */
+
+static esp_err_t api_status(httpd_req_t *req)
+{
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddTrueToObject(o, "ok");
+    const esp_app_desc_t *app = esp_app_get_description();
+    cJSON_AddStringToObject(o, "version", app->version);
+    cJSON_AddNumberToObject(o, "uptime", esp_timer_get_time() / 1000000);
+    power_status_t p;
+    power_get(&p);
+    cJSON *b = cJSON_AddObjectToObject(o, "battery");
+    cJSON_AddNumberToObject(b, "percent", p.percent);
+    cJSON_AddNumberToObject(b, "voltage", p.voltage_mv / 1000.0);
+    cJSON_AddBoolToObject(b, "charging", p.charging);
+    cJSON_AddBoolToObject(b, "usb", p.usb);
+    wifi_status_t w;
+    wifi_svc_status(&w);
+    cJSON *wf = cJSON_AddObjectToObject(o, "wifi");
+    cJSON_AddStringToObject(wf, "ssid", w.ssid);
+    cJSON_AddStringToObject(wf, "ip", w.ip);
+    cJSON_AddNumberToObject(wf, "rssi", w.rssi);
+    cJSON_AddStringToObject(wf, "mac", w.mac);
+    cJSON_AddBoolToObject(wf, "hotspot", w.ap_on);
+    cJSON_AddBoolToObject(o, "phone_connected", ble_svc_connected());
+    cJSON_AddNumberToObject(o, "steps", imu_steps_today());
+    cJSON_AddNumberToObject(o, "notifications", notif_count());
+    cJSON_AddNumberToObject(o, "free_ram", heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+    cJSON_AddNumberToObject(o, "free_psram", heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+    cJSON_AddBoolToObject(o, "screen_on", ui_is_awake());
+    char name[16] = "";
+    uint64_t total = 0, freeb = 0;
+    if (fm_card_info(name, sizeof(name), &total, &freeb)) {
+        cJSON *sd = cJSON_AddObjectToObject(o, "sd");
+        cJSON_AddStringToObject(sd, "name", name);
+        cJSON_AddNumberToObject(sd, "total", (double)total);
+        cJSON_AddNumberToObject(sd, "free", (double)freeb);
+    }
+    return send_cjson(req, o);
+}
+
+/* ------------------------------------------------------------------ settings */
+
+static esp_err_t api_settings_get(httpd_req_t *req)
+{
+    return send_cjson(req, settings_to_json());
+}
+
+static esp_err_t api_settings_set(httpd_req_t *req)
+{
+    char *body = read_body(req, 4096);
+    cJSON *o = body ? cJSON_Parse(body) : NULL;
+    free(body);
+    if (!o) {
+        return send_error(req, "400 Bad Request", "invalid JSON");
+    }
+    int n = settings_from_json(o);
+    cJSON_Delete(o);
+    cJSON *r = cJSON_CreateObject();
+    cJSON_AddTrueToObject(r, "ok");
+    cJSON_AddNumberToObject(r, "changed", n);
+    return send_cjson(req, r);
+}
+
+/* ------------------------------------------------------------------ notifications */
+
+static esp_err_t api_notify(httpd_req_t *req)
+{
+    char *body = read_body(req, 2048);
+    cJSON *o = body ? cJSON_Parse(body) : NULL;
+    free(body);
+    if (!o) {
+        return send_error(req, "400 Bad Request", "invalid JSON");
+    }
+    notif_t n = { 0 };
+    n.id = esp_random();
+    const cJSON *v;
+    strlcpy(n.app, (v = cJSON_GetObjectItem(o, "app")) && cJSON_IsString(v) ? v->valuestring : "Web", sizeof(n.app));
+    strlcpy(n.title, (v = cJSON_GetObjectItem(o, "title")) && cJSON_IsString(v) ? v->valuestring : "", sizeof(n.title));
+    strlcpy(n.body, (v = cJSON_GetObjectItem(o, "body")) && cJSON_IsString(v) ? v->valuestring : "", sizeof(n.body));
+    cJSON_Delete(o);
+    notif_add(&n);
+    return send_ok(req);
+}
+
+static esp_err_t api_notifications(httpd_req_t *req)
+{
+    cJSON *a = cJSON_CreateArray();
+    for (int i = 0; i < notif_count(); i++) {
+        notif_t n;
+        if (!notif_get(i, &n)) continue;
+        cJSON *o = cJSON_CreateObject();
+        cJSON_AddNumberToObject(o, "id", n.id);
+        cJSON_AddNumberToObject(o, "when", (double)n.when);
+        cJSON_AddStringToObject(o, "app", n.app);
+        cJSON_AddStringToObject(o, "title", n.title);
+        cJSON_AddStringToObject(o, "body", n.body);
+        cJSON_AddItemToArray(a, o);
+    }
+    return send_cjson(req, a);
+}
+
+static esp_err_t api_notif_clear(httpd_req_t *req)
+{
+    notif_clear();
+    return send_ok(req);
+}
+
+/* ------------------------------------------------------------------ alarms */
+
+static esp_err_t api_alarms(httpd_req_t *req)
+{
+    cJSON *a = cJSON_CreateArray();
+    for (int i = 0; i < alarm_count(); i++) {
+        alarm_t al;
+        alarm_get(i, &al);
+        cJSON *o = cJSON_CreateObject();
+        cJSON_AddBoolToObject(o, "enabled", al.enabled);
+        cJSON_AddNumberToObject(o, "hour", al.hour);
+        cJSON_AddNumberToObject(o, "min", al.min);
+        cJSON_AddNumberToObject(o, "days", al.days);
+        cJSON_AddStringToObject(o, "label", al.label);
+        cJSON_AddItemToArray(a, o);
+    }
+    return send_cjson(req, a);
+}
+
+/* POST /api/alarms  body {"hour":7,"min":30,"days":62,"label":"Work","enabled":true}  (?i=N edits N) */
+static esp_err_t api_alarm_set(httpd_req_t *req)
+{
+    char *body = read_body(req, 1024);
+    cJSON *o = body ? cJSON_Parse(body) : NULL;
+    free(body);
+    if (!o) {
+        return send_error(req, "400 Bad Request", "invalid JSON");
+    }
+    alarm_t al = { .enabled = true };
+    const cJSON *v;
+    if ((v = cJSON_GetObjectItem(o, "hour")) && cJSON_IsNumber(v)) al.hour = v->valueint % 24;
+    if ((v = cJSON_GetObjectItem(o, "min")) && cJSON_IsNumber(v)) al.min = v->valueint % 60;
+    if ((v = cJSON_GetObjectItem(o, "days")) && cJSON_IsNumber(v)) al.days = v->valueint & 0x7F;
+    if ((v = cJSON_GetObjectItem(o, "enabled")) && cJSON_IsBool(v)) al.enabled = cJSON_IsTrue(v);
+    if ((v = cJSON_GetObjectItem(o, "label")) && cJSON_IsString(v)) strlcpy(al.label, v->valuestring, sizeof(al.label));
+    cJSON_Delete(o);
+    char idx[8];
+    if (get_query_value(req, "i", idx, sizeof(idx))) {
+        alarm_set(atoi(idx), &al);
+    } else if (alarm_add(&al) < 0) {
+        return send_error(req, "409 Conflict", "too many alarms");
+    }
+    ui_on_data_changed();
+    return send_ok(req);
+}
+
+static esp_err_t api_alarm_delete(httpd_req_t *req)
+{
+    char idx[8];
+    if (!get_query_value(req, "i", idx, sizeof(idx))) {
+        return send_error(req, "400 Bad Request", "missing i");
+    }
+    alarm_delete(atoi(idx));
+    ui_on_data_changed();
+    return send_ok(req);
+}
+
+/* ------------------------------------------------------------------ updates */
+
+static esp_err_t api_ota_status(httpd_req_t *req)
+{
+    ota_status_t s;
+    ota_get(&s);
+    cJSON *o = cJSON_CreateObject();
+    static const char *states[] = { "idle", "checking", "downloading", "done", "error" };
+    cJSON_AddStringToObject(o, "state", states[s.state]);
+    cJSON_AddNumberToObject(o, "progress", s.progress);
+    cJSON_AddStringToObject(o, "current", s.current);
+    cJSON_AddStringToObject(o, "latest", s.latest);
+    cJSON_AddBoolToObject(o, "update_available", s.update_available);
+    cJSON_AddStringToObject(o, "message", s.message);
+    return send_cjson(req, o);
+}
+
+static esp_err_t api_ota_check(httpd_req_t *req) { ota_check_async(); return send_ok(req); }
+static esp_err_t api_ota_install(httpd_req_t *req) { ota_install_async(); return send_ok(req); }
+
+/* POST /api/ota/upload  body = firmware .bin */
+static esp_err_t api_ota_upload(httpd_req_t *req)
+{
+    if (!ota_upload_begin(req->content_len)) {
+        return send_error(req, "409 Conflict", "update busy or file too big");
+    }
+    notify_transfer();
+    char *buf = malloc(IO_BUF_SIZE);
+    size_t left = req->content_len;
+    bool ok = buf != NULL;
+    int timeouts = 0;
+    while (ok && left) {
+        int r = httpd_req_recv(req, buf, left < IO_BUF_SIZE ? left : IO_BUF_SIZE);
+        if (r == HTTPD_SOCK_ERR_TIMEOUT && ++timeouts < 5) continue;
+        if (r <= 0) { ok = false; break; }
+        timeouts = 0;
+        ok = ota_upload_write(buf, r);
+        left -= r;
+    }
+    free(buf);
+    if (!ota_upload_end(ok)) {
+        return send_error(req, "400 Bad Request", "not a valid firmware image");
+    }
+    return send_ok(req);
+}
+
+static esp_err_t api_reboot(httpd_req_t *req)
+{
+    send_ok(req);
+    vTaskDelay(pdMS_TO_TICKS(500));
+    power_restart();
+    return ESP_OK;
+}
+
+/* ------------------------------------------------------------------ auth wrapper */
+
+static bool auth_ok(httpd_req_t *req)
+{
+    const char *pass = settings()->web_pass;
+    if (!pass[0]) {
+        return true;
+    }
+    char hdr[160];
+    if (httpd_req_get_hdr_value_str(req, "Authorization", hdr, sizeof(hdr)) != ESP_OK ||
+        strncmp(hdr, "Basic ", 6) != 0) {
+        return false;
+    }
+    unsigned char dec[128];
+    size_t n = 0;
+    if (mbedtls_base64_decode(dec, sizeof(dec) - 1, &n, (const unsigned char *)hdr + 6, strlen(hdr + 6)) != 0) {
+        return false;
+    }
+    dec[n] = '\0';
+    const char *colon = strchr((char *)dec, ':');       /* "user:password", any user name */
+    return colon && strcmp(colon + 1, pass) == 0;
+}
+
+static esp_err_t guarded(httpd_req_t *req)
+{
+    if (!settings()->web_on) {
+        return send_error(req, "403 Forbidden", "web manager is turned off on the watch");
+    }
+    if (!auth_ok(req)) {
+        httpd_resp_set_status(req, "401 Unauthorized");
+        httpd_resp_set_hdr(req, "WWW-Authenticate", "Basic realm=\"ESP-Watch\"");
+        return httpd_resp_sendstr(req, "password required");
+    }
+    esp_err_t (*real)(httpd_req_t *) = req->user_ctx;
+    return real(req);
+}
+
 /* ------------------------------------------------------------------ start */
 
 void web_server_start(web_transfer_cb_t on_transfer)
@@ -464,9 +767,26 @@ void web_server_start(web_transfer_cb_t on_transfer)
         { .uri = "/api/copy",   .method = HTTP_POST, .handler = api_copy },
         { .uri = "/api/screenshot.bmp", .method = HTTP_GET, .handler = api_screenshot },
         { .uri = "/api/input",  .method = HTTP_POST, .handler = api_input },
+        { .uri = "/api/status", .method = HTTP_GET,  .handler = api_status },
+        { .uri = "/api/settings", .method = HTTP_GET, .handler = api_settings_get },
+        { .uri = "/api/settings", .method = HTTP_POST, .handler = api_settings_set },
+        { .uri = "/api/notify", .method = HTTP_POST, .handler = api_notify },
+        { .uri = "/api/notifications", .method = HTTP_GET, .handler = api_notifications },
+        { .uri = "/api/notifications/clear", .method = HTTP_POST, .handler = api_notif_clear },
+        { .uri = "/api/alarms", .method = HTTP_GET, .handler = api_alarms },
+        { .uri = "/api/alarms", .method = HTTP_POST, .handler = api_alarm_set },
+        { .uri = "/api/alarms/delete", .method = HTTP_POST, .handler = api_alarm_delete },
+        { .uri = "/api/ota", .method = HTTP_GET, .handler = api_ota_status },
+        { .uri = "/api/ota/check", .method = HTTP_POST, .handler = api_ota_check },
+        { .uri = "/api/ota/install", .method = HTTP_POST, .handler = api_ota_install },
+        { .uri = "/api/ota/upload", .method = HTTP_POST, .handler = api_ota_upload },
+        { .uri = "/api/reboot", .method = HTTP_POST, .handler = api_reboot },
     };
     for (size_t i = 0; i < sizeof(routes) / sizeof(routes[0]); i++) {
-        httpd_register_uri_handler(server, &routes[i]);
+        httpd_uri_t r = routes[i];
+        r.user_ctx = (void *)r.handler;      /* every route checks password / on-off first */
+        r.handler = guarded;
+        httpd_register_uri_handler(server, &r);
     }
     ESP_LOGI(TAG, "Web server running on port %d", config.server_port);
 }

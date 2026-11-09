@@ -3,396 +3,350 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ESP-Watch Files</title>
+<title>ESP-Watch</title>
 <style>
-  :root {
-    --bg: #f6f7f9; --panel: #ffffff; --text: #1d2330; --muted: #6b7385; --line: #e3e6ec;
-    --accent: #2f6fed; --accent-soft: #e8efff; --danger: #d64545; --sel: #eef3ff; --bar: #2f6fed;
-  }
+  :root { --bg:#f5f6f8; --panel:#fff; --text:#1c1f26; --muted:#6b7280; --line:#e4e7ec; --accent:#2f6fed;
+          --soft:#e9f0ff; --danger:#d64545; --ok:#1f9d55; --sel:#eef3ff; }
   @media (prefers-color-scheme: dark) {
-    :root {
-      --bg: #12151b; --panel: #1b1f27; --text: #e7eaf0; --muted: #959cab; --line: #2b313c;
-      --accent: #6d9bff; --accent-soft: #24304a; --danger: #ff6b6b; --sel: #222c40; --bar: #6d9bff;
-    }
-  }
-  * { box-sizing: border-box; }
-  body { margin: 0; background: var(--bg); color: var(--text);
-         font: 15px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
-  header { padding: 16px; background: var(--panel); border-bottom: 1px solid var(--line); }
-  h1 { margin: 0 0 8px; font-size: 18px; }
-  .storage { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--muted); }
-  .meter { flex: 1; max-width: 320px; height: 8px; background: var(--line); border-radius: 4px; overflow: hidden; }
-  .meter > div { height: 100%; width: 0; background: var(--bar); }
-  main { max-width: 1000px; margin: 0 auto; padding: 16px; }
-  .crumbs { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; margin-bottom: 12px; font-size: 14px; }
-  .crumbs a { color: var(--accent); text-decoration: none; cursor: pointer; padding: 2px 4px; border-radius: 4px; }
-  .crumbs a:hover { background: var(--accent-soft); }
-  .toolbar { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
-  button { font: inherit; padding: 7px 12px; border-radius: 8px; border: 1px solid var(--line);
-           background: var(--panel); color: var(--text); cursor: pointer; }
-  button:hover:not(:disabled) { border-color: var(--accent); }
-  button:disabled { opacity: .45; cursor: default; }
-  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-  button.danger:not(:disabled) { color: var(--danger); }
-  .list { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
-  .row { display: grid; grid-template-columns: 32px 28px 1fr auto 36px; align-items: center;
-         gap: 8px; padding: 8px 10px; border-top: 1px solid var(--line); }
-  .row:first-child { border-top: 0; }
-  .row.head { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
-  .row.sel { background: var(--sel); }
-  .row .name { overflow-wrap: anywhere; cursor: pointer; }
-  .row .name:hover { color: var(--accent); }
-  .row .size { color: var(--muted); font-size: 13px; text-align: right; white-space: nowrap; }
-  .row .dl { border: 0; background: none; padding: 4px; color: var(--muted); }
-  .empty { padding: 32px; text-align: center; color: var(--muted); }
-  .drop { border: 2px dashed var(--line); border-radius: 10px; padding: 14px; text-align: center;
-          color: var(--muted); margin-top: 12px; font-size: 14px; }
-  .drop.over { border-color: var(--accent); background: var(--accent-soft); color: var(--text); }
-  .opts { margin-top: 10px; font-size: 13px; color: var(--muted); }
-  #progress { margin-top: 12px; display: none; }
-  #progress .meter { max-width: none; }
-  #progress .label { font-size: 13px; color: var(--muted); margin-bottom: 4px; overflow-wrap: anywhere; }
-  #toast { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); max-width: calc(100% - 32px);
-           padding: 10px 16px; border-radius: 8px; background: var(--text); color: var(--bg);
-           font-size: 14px; opacity: 0; transition: opacity .2s; pointer-events: none; }
-  #toast.show { opacity: 1; }
-  #toast.err { background: var(--danger); color: #fff; }
-  #busy { position: fixed; inset: 0; background: rgba(0,0,0,.25); display: none;
-          align-items: center; justify-content: center; color: #fff; font-size: 16px; }
-  #busy.show { display: flex; }
-  input[type=checkbox] { width: 18px; height: 18px; }
-  @media (max-width: 560px) {
-    .row { grid-template-columns: 28px 24px 1fr 32px; }
-    .row .size { display: none; }
-  }
+    :root { --bg:#111317; --panel:#1b1e24; --text:#e8eaef; --muted:#9aa1ae; --line:#2b3039; --accent:#6d9bff;
+            --soft:#232c40; --danger:#ff6b6b; --ok:#4ade80; --sel:#212a3b; } }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:15px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
+  header { background:var(--panel); border-bottom:1px solid var(--line); padding:12px 16px; display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+  header h1 { font-size:18px; margin:0; }
+  header .st { color:var(--muted); font-size:13px; }
+  nav { display:flex; gap:4px; overflow-x:auto; background:var(--panel); border-bottom:1px solid var(--line); padding:0 8px; }
+  nav button { border:0; background:none; color:var(--muted); padding:12px 12px; font:inherit; cursor:pointer; border-bottom:2px solid transparent; white-space:nowrap; }
+  nav button.on { color:var(--accent); border-bottom-color:var(--accent); }
+  main { max-width:1000px; margin:0 auto; padding:16px; }
+  section { display:none; } section.on { display:block; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(210px,1fr)); gap:12px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:14px; }
+  .card h3 { margin:0 0 6px; font-size:13px; color:var(--muted); font-weight:600; text-transform:uppercase; letter-spacing:.04em; }
+  .big { font-size:26px; font-weight:600; }
+  .muted { color:var(--muted); font-size:13px; }
+  button.b { font:inherit; padding:8px 14px; border-radius:8px; border:1px solid var(--line); background:var(--panel); color:var(--text); cursor:pointer; }
+  button.b:hover:not(:disabled) { border-color:var(--accent); }
+  button.b:disabled { opacity:.45; cursor:default; }
+  button.p { background:var(--accent); border-color:var(--accent); color:#fff; }
+  button.d { color:var(--danger); }
+  .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin:10px 0; }
+  input, select, textarea { font:inherit; padding:8px 10px; border-radius:8px; border:1px solid var(--line); background:var(--panel); color:var(--text); }
+  .meter { height:8px; background:var(--line); border-radius:4px; overflow:hidden; margin-top:6px; } .meter>div { height:100%; background:var(--accent); width:0; }
+  /* screen */
+  .screenwrap { display:flex; gap:16px; flex-wrap:wrap; align-items:flex-start; }
+  #scr { width:410px; max-width:100%; aspect-ratio:410/502; border-radius:28px; border:6px solid #2a2d33; background:#000; cursor:pointer; user-select:none; touch-action:none; display:block; }
+  /* files */
+  .list { background:var(--panel); border:1px solid var(--line); border-radius:12px; overflow:hidden; }
+  .fr { display:grid; grid-template-columns:30px 26px 1fr auto 34px; gap:8px; align-items:center; padding:8px 10px; border-top:1px solid var(--line); }
+  .fr:first-child { border-top:0; } .fr.sel { background:var(--sel); }
+  .fr .n { overflow-wrap:anywhere; cursor:pointer; } .fr .n:hover { color:var(--accent); }
+  .fr .s { color:var(--muted); font-size:13px; white-space:nowrap; }
+  .fr .dl { border:0; background:none; color:var(--muted); cursor:pointer; }
+  .crumbs a { color:var(--accent); cursor:pointer; padding:2px 4px; }
+  .drop { border:2px dashed var(--line); border-radius:12px; padding:12px; text-align:center; color:var(--muted); margin-top:10px; }
+  .drop.over { border-color:var(--accent); background:var(--soft); }
+  /* settings */
+  .sf { display:grid; grid-template-columns:1fr 1fr; gap:8px 16px; }
+  .sf label { display:flex; flex-direction:column; gap:4px; font-size:13px; color:var(--muted); }
+  .sf label.chk { flex-direction:row; align-items:center; gap:8px; color:var(--text); font-size:15px; }
+  table { width:100%; border-collapse:collapse; } td,th { text-align:left; padding:8px; border-top:1px solid var(--line); }
+  #toast { position:fixed; left:50%; bottom:20px; transform:translateX(-50%); padding:10px 16px; border-radius:8px; background:var(--text); color:var(--bg); opacity:0; transition:opacity .2s; pointer-events:none; max-width:calc(100% - 32px); }
+  #toast.show { opacity:1; } #toast.err { background:var(--danger); color:#fff; }
+  @media (max-width:560px) { .sf { grid-template-columns:1fr; } .fr { grid-template-columns:26px 22px 1fr 30px; } .fr .s { display:none; } }
 </style>
 </head>
 <body>
-<header>
-  <h1>⌚ ESP-Watch Files</h1>
-  <div class="storage"><span id="cardName">SD card</span><div class="meter"><div id="used"></div></div><span id="space"></span></div>
-</header>
-
+<header><h1>⌚ ESP-Watch</h1><span class="st" id="hdrst">connecting…</span></header>
+<nav id="nav">
+  <button data-t="dash" class="on">Dashboard</button><button data-t="screen">Screen</button>
+  <button data-t="files">Files</button><button data-t="settings">Settings</button>
+  <button data-t="alarms">Alarms</button><button data-t="notif">Notifications</button>
+  <button data-t="update">Updates</button>
+</nav>
 <main>
-  <div class="crumbs" id="crumbs"></div>
+<!-- ============ dashboard ============ -->
+<section id="dash" class="on">
+  <div class="grid" id="dgrid"></div>
+  <div class="row"><button class="b" onclick="refreshStatus()">Refresh</button>
+    <button class="b d" onclick="reboot()">Restart watch</button></div>
+</section>
 
-  <div class="toolbar">
-    <button class="primary" id="btnUpload">⬆ Upload</button>
-    <button id="btnMkdir">＋ New folder</button>
-    <button id="btnCopy" disabled>Copy</button>
-    <button id="btnCut" disabled>Cut</button>
-    <button id="btnPaste" disabled>Paste</button>
-    <button id="btnRename" disabled>Rename</button>
-    <button id="btnDownload" disabled>⬇ Download</button>
-    <button class="danger" id="btnDelete" disabled>Delete</button>
-    <button id="btnRefresh" title="Refresh">⟳</button>
+<!-- ============ screen / remote control ============ -->
+<section id="screen">
+  <div class="screenwrap">
+    <img id="scr" alt="watch screen" draggable="false">
+    <div>
+      <p class="muted">Click to tap, drag to swipe. The picture refreshes every second while this tab is open.</p>
+      <div class="row"><button class="b" onclick="key('back')">◀ Back</button><button class="b" onclick="key('home')">⌂ Home</button>
+        <button class="b" onclick="key('power')">⏻ Screen on/off</button></div>
+      <div class="row"><button class="b" onclick="swipe(205,470,205,120)">Apps (swipe up)</button>
+        <button class="b" onclick="swipe(205,40,205,400)">Quick settings</button></div>
+      <div class="row"><button class="b" onclick="swipe(380,250,40,250)">Notifications</button>
+        <button class="b" onclick="swipe(40,250,380,250)">Today</button></div>
+      <div class="row"><button class="b" onclick="saveShot()">Save screenshot</button></div>
+    </div>
   </div>
-  <input type="file" id="fileInput" multiple hidden>
+</section>
 
-  <div class="list" id="list"></div>
+<!-- ============ files ============ -->
+<section id="files">
+  <div class="crumbs" id="crumbs"></div>
+  <div class="row">
+    <button class="b p" onclick="$('fi').click()">⬆ Upload</button><button class="b" onclick="mkdirDlg()">＋ Folder</button>
+    <button class="b" id="bCopy" onclick="clipSet(false)" disabled>Copy</button><button class="b" id="bCut" onclick="clipSet(true)" disabled>Cut</button>
+    <button class="b" id="bPaste" onclick="paste()" disabled>Paste</button><button class="b" id="bRen" onclick="renameDlg()" disabled>Rename</button>
+    <button class="b" id="bDl" onclick="dlSel()" disabled>⬇ Download</button><button class="b d" id="bDel" onclick="delSel()" disabled>Delete</button>
+    <span class="muted" id="space"></span>
+  </div>
+  <input type="file" id="fi" multiple hidden>
+  <div class="list" id="flist"></div>
+  <div class="drop" id="drop">Drag &amp; drop files here to upload into this folder</div>
+  <div id="prog" style="display:none"><div class="muted" id="progl"></div><div class="meter"><div id="progb"></div></div></div>
+  <label class="muted"><input type="checkbox" id="hid" onchange="renderFiles()"> show hidden files</label>
+</section>
 
-  <div class="drop" id="drop">Drag &amp; drop files here to upload them into this folder</div>
-  <div id="progress"><div class="label" id="progLabel"></div><div class="meter"><div id="progBar"></div></div></div>
-  <div class="opts"><label><input type="checkbox" id="showHidden"> Show hidden files (names starting with “.”, e.g. Mac “._” files)</label></div>
+<!-- ============ settings ============ -->
+<section id="settings">
+  <div class="card"><div class="sf" id="sform"></div>
+    <div class="row"><button class="b p" onclick="saveSettings()">Save settings</button><button class="b" onclick="loadSettings()">Reload</button></div>
+    <p class="muted">Passwords and tokens show as *** — leave them to keep the current value.</p></div>
+</section>
+
+<!-- ============ alarms ============ -->
+<section id="alarms">
+  <div class="card"><table id="atab"></table>
+    <div class="row"><input type="time" id="atime" value="07:00"><input id="alabel" placeholder="Label" maxlength="23">
+      <select id="adays"><option value="0">Once</option><option value="62" selected>Weekdays</option><option value="65">Weekends</option><option value="127">Every day</option></select>
+      <button class="b p" onclick="addAlarm()">Add alarm</button></div></div>
+</section>
+
+<!-- ============ notifications ============ -->
+<section id="notif">
+  <div class="card"><h3>Send a message to the watch</h3>
+    <div class="row"><input id="ntitle" placeholder="Title" style="flex:1"><input id="nbody" placeholder="Message" style="flex:2">
+      <button class="b p" onclick="sendNotif()">Send</button></div></div>
+  <div class="card" style="margin-top:12px"><h3>On the watch</h3><div id="nlist" class="muted">…</div>
+    <div class="row"><button class="b" onclick="loadNotifs()">Refresh</button><button class="b d" onclick="clearNotifs()">Clear all</button></div></div>
+</section>
+
+<!-- ============ updates ============ -->
+<section id="update">
+  <div class="card"><h3>Firmware</h3><div id="ostat" class="big">…</div><div class="muted" id="omsg"></div>
+    <div class="meter"><div id="obar"></div></div>
+    <div class="row"><button class="b" onclick="post('/api/ota/check').then(pollOta)">Check GitHub</button>
+      <button class="b p" onclick="if(confirm('Install the latest release? The watch restarts.'))post('/api/ota/install').then(pollOta)">Install latest release</button></div>
+    <h3 style="margin-top:16px">Upload a firmware file</h3>
+    <div class="row"><input type="file" id="ofile" accept=".bin"><button class="b p" onclick="uploadFw()">Upload &amp; install</button></div>
+    <p class="muted">Use <code>build/esp-watch-os.bin</code>. If the new firmware fails to start, the watch automatically goes back to the previous one.</p></div>
+</section>
 </main>
-
 <div id="toast"></div>
-<div id="busy">Working…</div>
 
 <script>
-const $ = (id) => document.getElementById(id);
-let cwd = '/';
-let items = [];
-const selected = new Set();
-let clip = null;                       // { paths: [...], cut: bool }
-
-const join = (dir, name) => (dir === '/' ? '' : dir) + '/' + name;
+const $ = id => document.getElementById(id);
 const enc = encodeURIComponent;
-
-function fmtSize(b) {
-  if (b < 1024) return b + ' B';
-  const u = ['KB', 'MB', 'GB', 'TB'];
-  let i = -1;
-  do { b /= 1024; i++; } while (b >= 1024 && i < u.length - 1);
-  return b.toFixed(b < 10 ? 1 : 0) + ' ' + u[i];
-}
-
-let toastTimer;
-function toast(msg, isErr = false) {
-  const t = $('toast');
-  t.textContent = msg;
-  t.className = 'show' + (isErr ? ' err' : '');
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => (t.className = ''), isErr ? 5000 : 2500);
-}
-
-async function api(method, url) {
-  const r = await fetch(url, { method });
-  let j = {};
-  try { j = await r.json(); } catch (_) {}
+let tab = 'dash';
+function toast(m, err) { const t = $('toast'); t.textContent = m; t.className = 'show' + (err ? ' err' : ''); clearTimeout(t._h); t._h = setTimeout(() => t.className = '', err ? 5000 : 2500); }
+async function api(method, url, body) {
+  const r = await fetch(url, { method, body, headers: body && typeof body === 'string' ? { 'Content-Type': 'application/json' } : {} });
+  let j = {}; try { j = await r.clone().json(); } catch (_) {}
   if (!r.ok || j.ok === false) throw new Error(j.error || r.statusText);
   return j;
 }
+const get = u => api('GET', u), post = (u, b) => api('POST', u, b);
+function fmt(b) { if (b < 1024) return b + ' B'; const u = ['KB','MB','GB']; let i = -1; do { b /= 1024; i++; } while (b >= 1024 && i < 2); return b.toFixed(b < 10 ? 1 : 0) + ' ' + u[i]; }
+function dur(s) { const d = Math.floor(s / 86400), h = Math.floor(s / 3600) % 24, m = Math.floor(s / 60) % 60; return (d ? d + 'd ' : '') + h + 'h ' + m + 'm'; }
 
-async function busy(fn) {
-  $('busy').classList.add('show');
-  try { await fn(); } catch (e) { toast(e.message, true); }
-  finally { $('busy').classList.remove('show'); }
-}
+/* ---------- tabs ---------- */
+$('nav').onclick = e => { const t = e.target.dataset.t; if (!t) return; tab = t;
+  document.querySelectorAll('nav button').forEach(b => b.classList.toggle('on', b.dataset.t === t));
+  document.querySelectorAll('section').forEach(s => s.classList.toggle('on', s.id === t));
+  ({ dash: refreshStatus, screen: shot, files: () => loadFiles(cwd), settings: loadSettings, alarms: loadAlarms, notif: loadNotifs, update: pollOta })[t]();
+};
 
-async function loadInfo() {
+/* ---------- dashboard ---------- */
+async function refreshStatus() {
   try {
-    const j = await api('GET', '/api/info');
-    if (!j.mounted) { $('space').textContent = 'No SD card'; return; }
-    $('cardName').textContent = 'SD card ' + j.name;
-    $('used').style.width = ((j.total - j.free) / j.total * 100).toFixed(1) + '%';
-    $('space').textContent = fmtSize(j.free) + ' free of ' + fmtSize(j.total);
-  } catch (e) { $('space').textContent = e.message; }
+    const s = await get('/api/status');
+    const b = s.battery, w = s.wifi;
+    $('hdrst').textContent = `${s.version} · ${b.percent >= 0 ? b.percent + '%' : 'USB'} · ${w.ip || 'hotspot'}`;
+    const cards = [
+      ['Battery', b.percent >= 0 ? b.percent + ' %' : '–', `${b.voltage.toFixed(2)} V · ${b.charging ? 'charging' : b.usb ? 'USB power' : 'on battery'}`],
+      ['Wi-Fi', w.ssid || (w.hotspot ? 'Hotspot' : '–'), `${w.ip || ''} ${w.rssi ? '· ' + w.rssi + ' dBm' : ''}`],
+      ['Phone', s.phone_connected ? 'Connected' : 'Not connected', 'Gadgetbridge over Bluetooth'],
+      ['Steps today', s.steps, ''],
+      ['Notifications', s.notifications, ''],
+      ['Storage', s.sd ? fmt(s.sd.free) + ' free' : 'No SD card', s.sd ? 'of ' + fmt(s.sd.total) : ''],
+      ['Firmware', s.version, 'up ' + dur(s.uptime)],
+      ['Memory', fmt(s.free_ram) + ' RAM', fmt(s.free_psram) + ' PSRAM free'],
+    ];
+    $('dgrid').innerHTML = '';
+    for (const [h, v, sub] of cards) {
+      const c = document.createElement('div'); c.className = 'card';
+      c.innerHTML = `<h3></h3><div class="big"></div><div class="muted"></div>`;
+      c.children[0].textContent = h; c.children[1].textContent = v; c.children[2].textContent = sub;
+      $('dgrid').appendChild(c);
+    }
+    if (s.sd) $('space').textContent = fmt(s.sd.free) + ' free of ' + fmt(s.sd.total);
+  } catch (e) { $('hdrst').textContent = e.message; }
 }
+async function reboot() { if (confirm('Restart the watch?')) { await post('/api/reboot').catch(() => {}); toast('Restarting…'); } }
 
-async function load(path = cwd) {
-  try {
-    const j = await api('GET', '/api/list?path=' + enc(path));
-    cwd = j.path;
+/* ---------- screen ---------- */
+let shotTimer;
+function shot() {
+  clearTimeout(shotTimer);
+  if (tab !== 'screen') return;
+  const img = $('scr');
+  img.onload = img.onerror = () => { shotTimer = setTimeout(shot, 1000); };
+  img.src = '/api/screenshot.bmp?t=' + Date.now();
+}
+function toWatch(e) { const r = $('scr').getBoundingClientRect(); return [Math.round((e.clientX - r.left) * 410 / r.width), Math.round((e.clientY - r.top) * 502 / r.height)]; }
+let down = null;
+$('scr').onpointerdown = e => { down = toWatch(e); };
+$('scr').onpointerup = e => {
+  if (!down) return; const up = toWatch(e); const dx = up[0] - down[0], dy = up[1] - down[1];
+  if (Math.hypot(dx, dy) < 15) post(`/api/input?type=tap&x=${down[0]}&y=${down[1]}`);
+  else swipe(down[0], down[1], up[0], up[1]);
+  down = null; setTimeout(shot, 400);
+};
+function key(k) { post('/api/input?type=key&k=' + k).then(() => setTimeout(shot, 300)); }
+function swipe(a, b, c, d) { post(`/api/input?type=swipe&x1=${a}&y1=${b}&x2=${c}&y2=${d}`).then(() => setTimeout(shot, 500)); }
+function saveShot() { const a = document.createElement('a'); a.href = '/api/screenshot.bmp?t=' + Date.now(); a.download = 'watch-' + Date.now() + '.bmp'; a.click(); }
+
+/* ---------- files ---------- */
+let cwd = '/', items = [], sel = new Set(), clip = null;
+const join = (d, n) => (d === '/' ? '' : d) + '/' + n;
+async function loadFiles(p) {
+  try { const j = await get('/api/list?path=' + enc(p)); cwd = j.path;
     items = j.items.sort((a, b) => (b.dir - a.dir) || a.name.localeCompare(b.name, undefined, { numeric: true }));
-    selected.clear();
-    render();
-  } catch (e) { toast(e.message, true); }
+    sel.clear(); renderFiles(); } catch (e) { toast(e.message, true); }
 }
-
-function visibleItems() {
-  return $('showHidden').checked ? items : items.filter((it) => !it.name.startsWith('.'));
-}
-
-function render() {
-  // breadcrumb
-  const crumbs = $('crumbs');
-  crumbs.innerHTML = '';
-  const parts = cwd.split('/').filter(Boolean);
-  const addCrumb = (label, path) => {
-    const a = document.createElement('a');
-    a.textContent = label;
-    a.onclick = () => load(path);
-    crumbs.appendChild(a);
-  };
-  addCrumb('SD card', '/');
-  parts.forEach((p, i) => {
-    crumbs.appendChild(document.createTextNode(' › '));
-    addCrumb(p, '/' + parts.slice(0, i + 1).join('/'));
-  });
-
-  // list
-  const list = $('list');
-  list.innerHTML = '';
-  const vis = visibleItems();
-  const head = document.createElement('div');
-  head.className = 'row head';
-  head.innerHTML = '<input type="checkbox" id="selAll"><span></span><span>Name</span><span class="size">Size</span><span></span>';
-  list.appendChild(head);
-  const selAll = head.querySelector('#selAll');
-  selAll.checked = vis.length > 0 && vis.every((it) => selected.has(it.name));
-  selAll.onchange = () => { vis.forEach((it) => selAll.checked ? selected.add(it.name) : selected.delete(it.name)); render(); };
-
-  if (cwd !== '/') {
-    const up = document.createElement('div');
-    up.className = 'row';
-    up.innerHTML = '<span></span><span>↩</span><span class="name">.. (up)</span><span></span><span></span>';
-    up.querySelector('.name').onclick = () => load(cwd.substring(0, cwd.lastIndexOf('/')) || '/');
-    list.appendChild(up);
+function vis() { return $('hid').checked ? items : items.filter(i => !i.name.startsWith('.')); }
+function renderFiles() {
+  const cr = $('crumbs'); cr.innerHTML = '';
+  const add = (l, p) => { const a = document.createElement('a'); a.textContent = l; a.onclick = () => loadFiles(p); cr.appendChild(a); };
+  add('SD card', '/'); const parts = cwd.split('/').filter(Boolean);
+  parts.forEach((p, i) => { cr.appendChild(document.createTextNode(' › ')); add(p, '/' + parts.slice(0, i + 1).join('/')); });
+  const L = $('flist'); L.innerHTML = '';
+  if (cwd !== '/') { const r = document.createElement('div'); r.className = 'fr'; r.innerHTML = '<span></span><span>↩</span><span class="n">.. (up)</span><span></span><span></span>';
+    r.querySelector('.n').onclick = () => loadFiles(cwd.substring(0, cwd.lastIndexOf('/')) || '/'); L.appendChild(r); }
+  for (const it of vis()) {
+    const r = document.createElement('div'); r.className = 'fr' + (sel.has(it.name) ? ' sel' : '');
+    const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = sel.has(it.name);
+    cb.onchange = () => { cb.checked ? sel.add(it.name) : sel.delete(it.name); renderFiles(); };
+    const ic = document.createElement('span'); ic.textContent = it.dir ? '📁' : '📄';
+    const n = document.createElement('span'); n.className = 'n'; n.textContent = it.name;
+    n.onclick = () => it.dir ? loadFiles(join(cwd, it.name)) : window.open('/api/file?path=' + enc(join(cwd, it.name)));
+    const s = document.createElement('span'); s.className = 's'; s.textContent = it.dir ? '' : fmt(it.size);
+    const d = document.createElement('span');
+    if (!it.dir) { const b = document.createElement('button'); b.className = 'dl'; b.textContent = '⬇'; b.onclick = () => dl(it.name); d.appendChild(b); }
+    r.append(cb, ic, n, s, d); L.appendChild(r);
   }
-  if (vis.length === 0) {
-    const e = document.createElement('div');
-    e.className = 'empty';
-    e.textContent = 'This folder is empty';
-    list.appendChild(e);
-  }
-  for (const it of vis) {
-    const row = document.createElement('div');
-    row.className = 'row' + (selected.has(it.name) ? ' sel' : '');
-    const cb = document.createElement('input');
-    cb.type = 'checkbox';
-    cb.checked = selected.has(it.name);
-    cb.onchange = () => { cb.checked ? selected.add(it.name) : selected.delete(it.name); render(); };
-    const icon = document.createElement('span');
-    icon.textContent = it.dir ? '📁' : fileIcon(it.name);
-    const name = document.createElement('span');
-    name.className = 'name';
-    name.textContent = it.name;
-    name.onclick = () => it.dir ? load(join(cwd, it.name)) : window.open('/api/file?path=' + enc(join(cwd, it.name)), '_blank');
-    const size = document.createElement('span');
-    size.className = 'size';
-    size.textContent = it.dir ? '' : fmtSize(it.size);
-    const dl = document.createElement('span');
-    if (!it.dir) {
-      const b = document.createElement('button');
-      b.className = 'dl';
-      b.title = 'Download';
-      b.textContent = '⬇';
-      b.onclick = () => download(it.name);
-      dl.appendChild(b);
-    }
-    row.append(cb, icon, name, size, dl);
-    list.appendChild(row);
-  }
+  const k = sel.size, files = [...sel].every(nm => !(items.find(i => i.name === nm) || {}).dir);
+  $('bCopy').disabled = $('bCut').disabled = $('bDel').disabled = !k; $('bRen').disabled = k !== 1; $('bDl').disabled = !k || !files;
+  $('bPaste').disabled = !clip; $('bPaste').textContent = clip ? `Paste (${clip.paths.length})` : 'Paste';
+}
+function dl(n) { const a = document.createElement('a'); a.href = '/api/file?path=' + enc(join(cwd, n)); a.download = n; a.click(); }
+function dlSel() { [...sel].forEach((n, i) => setTimeout(() => dl(n), i * 400)); }
+function clipSet(cut) { clip = { paths: [...sel].map(n => join(cwd, n)), cut }; toast((cut ? 'Cut ' : 'Copied ') + clip.paths.length + ' item(s)'); sel.clear(); renderFiles(); }
+function free(name) { const t = new Set(items.map(i => i.name)); if (!t.has(name)) return name; const d = name.lastIndexOf('.'), b = d > 0 ? name.slice(0, d) : name, e = d > 0 ? name.slice(d) : '';
+  for (let i = 1; ; i++) { const c = `${b} copy${i > 1 ? ' ' + i : ''}${e}`; if (!t.has(c)) return c; } }
+async function paste() { try { for (const s of clip.paths) { const n = s.split('/').pop(); if (clip.cut && join(cwd, n) === s) continue;
+      const d = join(cwd, clip.cut ? n : free(n)); await post(`/api/${clip.cut ? 'move' : 'copy'}?from=${enc(s)}&to=${enc(d)}`); items.push({ name: d.split('/').pop() }); }
+    toast('Done'); if (clip.cut) clip = null; loadFiles(cwd); } catch (e) { toast(e.message, true); } }
+async function renameDlg() { const o = [...sel][0], n = prompt('New name', o); if (!n || n === o) return;
+  try { await post(`/api/move?from=${enc(join(cwd, o))}&to=${enc(join(cwd, n))}`); loadFiles(cwd); } catch (e) { toast(e.message, true); } }
+async function mkdirDlg() { const n = prompt('Folder name'); if (!n) return; try { await post('/api/mkdir?path=' + enc(join(cwd, n))); loadFiles(cwd); } catch (e) { toast(e.message, true); } }
+async function delSel() { const ns = [...sel]; if (!confirm(`Delete ${ns.length} item(s)? Folders are deleted with everything inside. This cannot be undone.`)) return;
+  try { for (const n of ns) await post('/api/delete?path=' + enc(join(cwd, n))); toast('Deleted'); loadFiles(cwd); } catch (e) { toast(e.message, true); } }
+function up1(file, over) { return new Promise((res, rej) => { const x = new XMLHttpRequest();
+  x.open('POST', '/api/upload?path=' + enc(join(cwd, file.name)) + (over ? '&overwrite=1' : ''));
+  x.upload.onprogress = e => { if (e.lengthComputable) $('progb').style.width = (e.loaded / e.total * 100) + '%'; };
+  x.onload = () => x.status < 300 ? res() : rej(Object.assign(new Error(file.name + ': ' + x.statusText), { status: x.status }));
+  x.onerror = () => rej(new Error(file.name + ': network error')); x.send(file); }); }
+async function uploadFiles(fs) { if (!fs.length) return; $('prog').style.display = 'block';
+  for (const [i, f] of fs.entries()) { $('progl').textContent = `Uploading ${i + 1}/${fs.length}: ${f.name} (${fmt(f.size)})`; $('progb').style.width = 0;
+    try { await up1(f); } catch (e) { if (e.status === 409 && confirm(`Replace "${f.name}"?`)) await up1(f, true).catch(x => toast(x.message, true)); else if (e.status !== 409) toast(e.message, true); } }
+  $('prog').style.display = 'none'; loadFiles(cwd); refreshStatus(); }
+$('fi').onchange = e => { uploadFiles([...e.target.files]); e.target.value = ''; };
+['dragenter','dragover'].forEach(v => document.addEventListener(v, e => { if (tab !== 'files') return; e.preventDefault(); $('drop').classList.add('over'); }));
+['dragleave','drop'].forEach(v => document.addEventListener(v, e => { e.preventDefault(); $('drop').classList.remove('over'); }));
+document.addEventListener('drop', e => { if (tab === 'files') uploadFiles([...e.dataTransfer.files]); });
 
-  // toolbar state
-  const n = selected.size;
-  const onlyFiles = [...selected].every((nm) => !(items.find((i) => i.name === nm) || {}).dir);
-  $('btnCopy').disabled = $('btnCut').disabled = $('btnDelete').disabled = n === 0;
-  $('btnRename').disabled = n !== 1;
-  $('btnDownload').disabled = n === 0 || !onlyFiles;
-  $('btnPaste').disabled = !clip;
-  $('btnPaste').textContent = clip ? `Paste (${clip.paths.length})` : 'Paste';
+/* ---------- settings ---------- */
+const LABELS = { brightness:'Brightness %', screen_timeout_s:'Screen timeout (s, 0 = never)', raise_to_wake:'Raise to wake', always_on:'Always-on display',
+  watchface:'Watch face (0 digital, 1 analog, 2 minimal)', accent_color:'Accent colour', volume:'Volume %', muted:'Mute', vibration:'Vibration', haptic_touch:'Touch haptics',
+  timezone:'Time zone (POSIX)', time_24h:'24-hour clock', auto_time:'Automatic time', wifi_on:'Wi-Fi', hotspot_on:'Hotspot', ap_ssid:'Hotspot name', ap_pass:'Hotspot password',
+  hostname:'Hostname', bt_on:'Bluetooth', bt_name:'Bluetooth name', web_on:'Web manager', web_pass:'Web password', notif_on:'Phone notifications', notif_wake:'Wake on notification',
+  dnd:'Do not disturb', dnd_scheduled:'Scheduled DND', dnd_start_min:'DND start (minutes after midnight)', dnd_end_min:'DND end (minutes)', power_save:'Power saving',
+  ota_repo:'Update repo (owner/name)', ota_token:'GitHub token', ota_auto_check:'Check for updates automatically', latitude:'Latitude', longitude:'Longitude', city:'City', step_goal:'Daily step goal' };
+let settingsCache = {};
+async function loadSettings() {
+  try { settingsCache = await get('/api/settings'); const f = $('sform'); f.innerHTML = '';
+    for (const [k, v] of Object.entries(settingsCache)) {
+      const l = document.createElement('label'); const name = LABELS[k] || k;
+      if (typeof v === 'boolean') { l.className = 'chk'; l.innerHTML = '<input type="checkbox"><span></span>'; l.children[0].checked = v; l.children[0].dataset.k = k; l.children[1].textContent = name; }
+      else { l.innerHTML = '<span></span><input>'; l.children[0].textContent = name; const i = l.children[1]; i.dataset.k = k;
+        if (k === 'accent_color') { i.type = 'color'; i.value = '#' + v.toString(16).padStart(6, '0'); }
+        else { i.type = typeof v === 'number' ? 'number' : (/pass|token/.test(k) ? 'password' : 'text'); if (typeof v === 'number') i.step = 'any'; i.value = v; } }
+      f.appendChild(l);
+    } } catch (e) { toast(e.message, true); }
+}
+async function saveSettings() {
+  const out = {};
+  document.querySelectorAll('#sform input').forEach(i => { const k = i.dataset.k, o = settingsCache[k];
+    let v = i.type === 'checkbox' ? i.checked : i.type === 'color' ? parseInt(i.value.slice(1), 16) : typeof o === 'number' ? Number(i.value) : i.value;
+    if (v !== o) out[k] = v; });
+  if (!Object.keys(out).length) return toast('Nothing changed');
+  try { await post('/api/settings', JSON.stringify(out)); toast('Saved ' + Object.keys(out).length + ' setting(s)'); loadSettings(); } catch (e) { toast(e.message, true); }
 }
 
-function fileIcon(name) {
-  const ext = name.split('.').pop().toLowerCase();
-  if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg'].includes(ext)) return '🖼️';
-  if (['mp4', 'mov', 'avi', 'mkv'].includes(ext)) return '🎬';
-  if (['mp3', 'wav', 'flac', 'aac'].includes(ext)) return '🎵';
-  if (['txt', 'md', 'log', 'csv', 'json'].includes(ext)) return '📝';
-  return '📄';
+/* ---------- alarms ---------- */
+const DAYS = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+function daysTxt(d) { if (!d) return 'Once'; if (d === 127) return 'Every day'; if (d === 62) return 'Weekdays'; if (d === 65) return 'Weekends'; return DAYS.filter((_, i) => d & (1 << i)).join(' '); }
+async function loadAlarms() {
+  try { const a = await get('/api/alarms'); const t = $('atab');
+    t.innerHTML = '<tr><th>Time</th><th>Repeat</th><th>Label</th><th>On</th><th></th></tr>';
+    a.forEach((al, i) => { const r = t.insertRow();
+      r.innerHTML = `<td>${String(al.hour).padStart(2, '0')}:${String(al.min).padStart(2, '0')}</td><td>${daysTxt(al.days)}</td><td></td><td><input type="checkbox"></td><td><button class="b d">Delete</button></td>`;
+      r.cells[2].textContent = al.label; const cb = r.querySelector('input'); cb.checked = al.enabled;
+      cb.onchange = () => post('/api/alarms?i=' + i, JSON.stringify({ ...al, enabled: cb.checked })).catch(e => toast(e.message, true));
+      r.querySelector('button').onclick = () => post('/api/alarms/delete?i=' + i).then(loadAlarms); });
+    if (!a.length) t.insertRow().innerHTML = '<td colspan="5" class="muted">No alarms</td>'; } catch (e) { toast(e.message, true); }
 }
+async function addAlarm() { const [h, m] = $('atime').value.split(':').map(Number);
+  try { await post('/api/alarms', JSON.stringify({ hour: h, min: m, days: Number($('adays').value), label: $('alabel').value, enabled: true })); toast('Alarm added'); loadAlarms(); } catch (e) { toast(e.message, true); } }
 
-function download(name) {
-  const a = document.createElement('a');
-  a.href = '/api/file?path=' + enc(join(cwd, name));
-  a.download = name;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
+/* ---------- notifications ---------- */
+async function loadNotifs() {
+  try { const a = await get('/api/notifications'); const d = $('nlist'); d.innerHTML = '';
+    if (!a.length) d.textContent = 'No notifications';
+    for (const n of a) { const p = document.createElement('div'); p.style.margin = '8px 0';
+      p.innerHTML = '<b></b> <span class="muted"></span><div></div>'; p.children[0].textContent = n.title; p.children[1].textContent = n.app + ' · ' + new Date(n.when * 1000).toLocaleTimeString(); p.children[2].textContent = n.body; d.appendChild(p); } } catch (e) { toast(e.message, true); }
 }
+async function sendNotif() { try { await post('/api/notify', JSON.stringify({ app: 'Web', title: $('ntitle').value, body: $('nbody').value })); toast('Sent'); $('nbody').value = ''; loadNotifs(); } catch (e) { toast(e.message, true); } }
+async function clearNotifs() { await post('/api/notifications/clear'); loadNotifs(); }
 
-/* "photo.jpg" -> "photo copy.jpg", "photo copy 2.jpg", ... if the name is taken here */
-function freeName(name) {
-  const taken = new Set(items.map((i) => i.name));
-  if (!taken.has(name)) return name;
-  const dot = name.lastIndexOf('.');
-  const base = dot > 0 ? name.slice(0, dot) : name;
-  const ext = dot > 0 ? name.slice(dot) : '';
-  for (let i = 1; ; i++) {
-    const cand = `${base} copy${i > 1 ? ' ' + i : ''}${ext}`;
-    if (!taken.has(cand)) return cand;
-  }
+/* ---------- updates ---------- */
+let otaTimer;
+async function pollOta() {
+  clearTimeout(otaTimer);
+  try { const o = await get('/api/ota');
+    $('ostat').textContent = o.state === 'downloading' ? `Installing… ${o.progress}%` : o.update_available ? `Update ${o.latest} available` : `Installed: ${o.current}`;
+    $('omsg').textContent = o.message + (o.latest ? ` (latest release: ${o.latest})` : ''); $('obar').style.width = o.progress + '%';
+    if (o.state === 'checking' || o.state === 'downloading') otaTimer = setTimeout(pollOta, 1000);
+  } catch (e) { $('omsg').textContent = 'Watch restarting or unreachable…'; otaTimer = setTimeout(pollOta, 3000); }
 }
+function uploadFw() { const f = $('ofile').files[0]; if (!f) return toast('Choose a .bin file', true);
+  if (!confirm(`Install ${f.name}? The watch restarts.`)) return;
+  const x = new XMLHttpRequest(); x.open('POST', '/api/ota/upload');
+  x.upload.onprogress = e => { if (e.lengthComputable) { $('obar').style.width = (e.loaded / e.total * 100) + '%'; $('ostat').textContent = `Uploading… ${Math.round(e.loaded / e.total * 100)}%`; } };
+  x.onload = () => { if (x.status < 300) { toast('Installed - restarting'); $('ostat').textContent = 'Restarting…'; setTimeout(pollOta, 8000); } else toast('Upload failed: ' + x.responseText, true); };
+  x.send(f); }
 
-// ---------------------------------------------------------------- uploads
-function uploadOne(file, overwrite) {
-  return new Promise((resolve, reject) => {
-    const x = new XMLHttpRequest();
-    x.open('POST', '/api/upload?path=' + enc(join(cwd, file.name)) + (overwrite ? '&overwrite=1' : ''));
-    x.upload.onprogress = (e) => {
-      if (e.lengthComputable) $('progBar').style.width = (e.loaded / e.total * 100).toFixed(1) + '%';
-    };
-    x.onload = () => {
-      if (x.status >= 200 && x.status < 300) return resolve();
-      let msg = x.statusText;
-      try { msg = JSON.parse(x.responseText).error; } catch (_) {}
-      reject(Object.assign(new Error(`${file.name}: ${msg}`), { status: x.status }));
-    };
-    x.onerror = () => reject(new Error(`${file.name}: network error`));
-    x.send(file);
-  });
-}
-
-async function uploadFiles(files) {
-  if (!files.length) return;
-  $('progress').style.display = 'block';
-  let done = 0;
-  for (const file of files) {
-    $('progLabel').textContent = `Uploading ${done + 1}/${files.length}: ${file.name} (${fmtSize(file.size)})`;
-    $('progBar').style.width = '0';
-    try {
-      await uploadOne(file, false);
-      done++;
-    } catch (e) {
-      if (e.status === 409 && confirm(`"${file.name}" already exists here. Replace it?`)) {
-        try { await uploadOne(file, true); done++; } catch (e2) { toast(e2.message, true); }
-      } else if (e.status !== 409) {
-        toast(e.message, true);
-      }
-    }
-  }
-  $('progress').style.display = 'none';
-  if (done) toast(`Uploaded ${done} file(s)`);
-  load();
-  loadInfo();
-}
-
-// ---------------------------------------------------------------- buttons
-$('btnUpload').onclick = () => $('fileInput').click();
-$('fileInput').onchange = (e) => { uploadFiles([...e.target.files]); e.target.value = ''; };
-
-$('btnMkdir').onclick = () => {
-  const name = prompt('New folder name:');
-  if (!name) return;
-  busy(async () => { await api('POST', '/api/mkdir?path=' + enc(join(cwd, name))); await load(); });
-};
-
-$('btnCopy').onclick = () => {
-  clip = { paths: [...selected].map((n) => join(cwd, n)), cut: false };
-  toast(`Copied ${clip.paths.length} item(s) - open a folder and press Paste`);
-  selected.clear(); render();
-};
-$('btnCut').onclick = () => {
-  clip = { paths: [...selected].map((n) => join(cwd, n)), cut: true };
-  toast(`Cut ${clip.paths.length} item(s) - open a folder and press Paste`);
-  selected.clear(); render();
-};
-
-$('btnPaste').onclick = () => busy(async () => {
-  let count = 0;
-  for (const src of clip.paths) {
-    const name = src.split('/').pop();
-    if (clip.cut && join(cwd, name) === src) continue;      // moving into the same folder: nothing to do
-    const dst = join(cwd, clip.cut ? name : freeName(name));
-    await api('POST', `/api/${clip.cut ? 'move' : 'copy'}?from=${enc(src)}&to=${enc(dst)}`);
-    items.push({ name: dst.split('/').pop() });             // so freeName sees it for the next item
-    count++;
-  }
-  toast(`${clip.cut ? 'Moved' : 'Copied'} ${count} item(s)`);
-  if (clip.cut) clip = null;
-  await load();
-  loadInfo();
-});
-
-$('btnRename').onclick = () => {
-  const old = [...selected][0];
-  const name = prompt('New name:', old);
-  if (!name || name === old) return;
-  busy(async () => {
-    await api('POST', `/api/move?from=${enc(join(cwd, old))}&to=${enc(join(cwd, name))}`);
-    await load();
-  });
-};
-
-$('btnDownload').onclick = () => [...selected].forEach((n, i) => setTimeout(() => download(n), i * 400));
-
-$('btnDelete').onclick = () => {
-  const names = [...selected];
-  const folders = names.filter((n) => (items.find((i) => i.name === n) || {}).dir).length;
-  const msg = `Delete ${names.length} item(s)?` + (folders ? `\n\n${folders} folder(s) will be deleted WITH everything inside.` : '') +
-              '\n\nThis cannot be undone.';
-  if (!confirm(msg)) return;
-  busy(async () => {
-    for (const n of names) await api('POST', '/api/delete?path=' + enc(join(cwd, n)));
-    toast(`Deleted ${names.length} item(s)`);
-    await load();
-    loadInfo();
-  });
-};
-
-$('btnRefresh').onclick = () => { load(); loadInfo(); };
-$('showHidden').onchange = render;
-
-// ---------------------------------------------------------------- drag & drop
-const drop = $('drop');
-['dragenter', 'dragover'].forEach((ev) => document.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add('over'); }));
-['dragleave', 'drop'].forEach((ev) => document.addEventListener(ev, (e) => { e.preventDefault(); if (ev === 'drop' || e.target === drop) drop.classList.remove('over'); }));
-document.addEventListener('drop', (e) => uploadFiles([...e.dataTransfer.files]));
-
-load('/');
-loadInfo();
+refreshStatus(); setInterval(() => { if (tab === 'dash') refreshStatus(); }, 10000);
 </script>
 </body>
 </html>
