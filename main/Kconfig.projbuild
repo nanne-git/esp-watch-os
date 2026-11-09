@@ -1,0 +1,20 @@
+menu "ESP-Watch settings"
+
+    config WATCH_WIFI_SSID
+        string "Wi-Fi network name (SSID)"
+        default "nanne"
+        help
+            The Wi-Fi network the watch joins so you can open the file manager in a browser.
+
+    config WATCH_WIFI_PASSWORD
+        string "Wi-Fi password (leave empty for an open network)"
+        default ""
+
+    config WATCH_AP_PASSWORD
+        string "Password for the watch's own hotspot (fallback, at least 8 characters)"
+        default "watchfiles"
+        help
+            If the watch can't join the network above, it starts its own Wi-Fi
+            hotspot "ESP-Watch-Files" with this password. Open http://192.168.4.1/
+
+endmenu
