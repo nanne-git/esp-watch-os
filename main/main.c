@@ -12,6 +12,7 @@
 #include "esp_log.h"
 #include "esp_netif.h"
 #include "esp_ota_ops.h"
+#include "esp_pm.h"
 #include "file_manager.h"
 #include "hw.h"
 #include "nvs_flash.h"
@@ -28,6 +29,7 @@ static const char *TAG = "main";
 static void on_web_transfer(void)
 {
     ble_svc_pause_adv_for_transfer();
+    wifi_svc_set_high_throughput(true);     /* radio awake while files move, 15 s timeout */
 }
 
 void app_main(void)
@@ -41,6 +43,13 @@ void app_main(void)
         nvs_flash_init();
     }
     settings_init();
+
+    /* dynamic frequency scaling: 80 MHz when idle, up to 160 MHz while someone holds a lock
+     * (the UI holds one while the screen is on; Wi-Fi/SPI drivers take their own) */
+    esp_pm_config_t pm = { .max_freq_mhz = 160, .min_freq_mhz = 80, .light_sleep_enable = false };
+    if (esp_pm_configure(&pm) != ESP_OK) {
+        ESP_LOGW(TAG, "power management not available");
+    }
     /* network stack first: SNTP, mDNS and Wi-Fi all need it */
     esp_netif_init();
     esp_event_loop_create_default();
@@ -51,7 +60,7 @@ void app_main(void)
             .task_stack = 12288,
             .task_affinity = 1,
             .task_max_sleep_ms = 500,
-            .timer_period_ms = 5,
+            .timer_period_ms = 10,
         },
         /* LVGL draws into a large PSRAM buffer; the port copies 20-line chunks into a small
          * internal DMA buffer for the SPI transfer, so Wi-Fi/BLE fragmenting internal RAM

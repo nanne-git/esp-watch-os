@@ -23,3 +23,5 @@ void        weather_start(void);
 void        weather_get(weather_t *out);
 void        weather_refresh(void);           /* async */
 const char *weather_desc(int code);
+/* weather pushed by the phone (Gadgetbridge); used when the watch has no internet */
+void        weather_set_from_phone(float temp_c, int owm_code, int humidity, float wind_kmh, float hi_c, float lo_c);

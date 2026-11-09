@@ -67,6 +67,14 @@ static void status_text(char *buf, size_t len)
              notif_count() ? LV_SYMBOL_BELL : "", bat);
 }
 
+/* only touch a label when its text really changes: every set_text redraws that area */
+static void set_txt(lv_obj_t *l, const char *t)
+{
+    if (l && strcmp(lv_label_get_text(l), t) != 0) {
+        lv_label_set_text(l, t);
+    }
+}
+
 /* ======================================================================== watch faces */
 
 typedef struct {
@@ -78,6 +86,7 @@ typedef struct {
     lv_obj_t *hour_big, *min_big;
     int       face;
     bool      aod;
+    int       needle_key, needle_sec;   /* last drawn hour*60+min / second */
 } face_t;
 
 static face_t s_face = { .face = -1 };
@@ -229,6 +238,7 @@ static void face_rebuild(lv_obj_t *scr, int face, bool aod)
     memset(&s_face, 0, sizeof(s_face));
     s_face.face = face;
     s_face.aod = aod;
+    s_face.needle_key = s_face.needle_sec = -1;
     lv_obj_t *r = lv_obj_create(scr);
     s_face.root = r;
     lv_obj_remove_style_all(r);
@@ -288,11 +298,16 @@ void ui_home_refresh(void)
         } else {
             snprintf(buf, sizeof(buf), "Time not set");
         }
-        lv_label_set_text(s_face.date, buf);
+        set_txt(s_face.date, buf);
     }
     if (s_face.status) {
-        status_text(buf, sizeof(buf));
-        lv_label_set_text(s_face.status, buf);
+        static int64_t last_status;
+        int64_t tnow = esp_timer_get_time();
+        if (tnow - last_status > 3000000 || strcmp(lv_label_get_text(s_face.status), "") == 0) {
+            last_status = tnow;
+            status_text(buf, sizeof(buf));
+            set_txt(s_face.status, buf);
+        }
     }
     int h12 = lt.tm_hour % 12 ? lt.tm_hour % 12 : 12;
     bool h24 = settings()->time_24h;
@@ -301,20 +316,25 @@ void ui_home_refresh(void)
         if (h24) {
             snprintf(buf, sizeof(buf), "%02d:%02d", lt.tm_hour, lt.tm_min);
         }
-        lv_label_set_text(s_face.time, buf);
-        lv_label_set_text(s_face.ampm, h24 ? "" : (lt.tm_hour < 12 ? "AM" : "PM"));
+        set_txt(s_face.time, buf);
+        set_txt(s_face.ampm, h24 ? "" : (lt.tm_hour < 12 ? "AM" : "PM"));
     }
     if (s_face.hour_big) {
         snprintf(buf, sizeof(buf), "%02d", h24 ? lt.tm_hour : h12);
-        lv_label_set_text(s_face.hour_big, buf);
+        set_txt(s_face.hour_big, buf);
         snprintf(buf, sizeof(buf), "%02d", lt.tm_min);
-        lv_label_set_text(s_face.min_big, buf);
+        set_txt(s_face.min_big, buf);
     }
     if (s_face.needle_h) {
         static lv_point_precise_t ph[2], pm[2], ps[2];
-        set_needle(s_face.needle_h, ph, (lt.tm_hour % 12) * 30 + lt.tm_min * 0.5f, 95, 14);
-        set_needle(s_face.needle_m, pm, lt.tm_min * 6 + lt.tm_sec * 0.1f, 145, 16);
-        if (s_face.needle_s) {
+        int key = lt.tm_hour * 60 + lt.tm_min;
+        if (key != s_face.needle_key) {
+            s_face.needle_key = key;
+            set_needle(s_face.needle_h, ph, (lt.tm_hour % 12) * 30 + lt.tm_min * 0.5f, 95, 14);
+            set_needle(s_face.needle_m, pm, lt.tm_min * 6, 145, 16);
+        }
+        if (s_face.needle_s && lt.tm_sec != s_face.needle_sec) {
+            s_face.needle_sec = lt.tm_sec;
             set_needle(s_face.needle_s, ps, lt.tm_sec * 6, 160, 26);
         }
     }
@@ -322,18 +342,19 @@ void ui_home_refresh(void)
         uint32_t steps = imu_steps_today();
         uint16_t goal = settings()->step_goal ? settings()->step_goal : 8000;
         snprintf(buf, sizeof(buf), "%lu", (unsigned long)steps);
-        lv_label_set_text(s_face.c_steps_lbl, buf);
-        lv_arc_set_value(s_face.c_steps_arc, steps * 100 / goal > 100 ? 100 : steps * 100 / goal);
+        set_txt(s_face.c_steps_lbl, buf);
+        int sv = steps * 100 / goal > 100 ? 100 : steps * 100 / goal;
+        if (lv_arc_get_value(s_face.c_steps_arc) != sv) lv_arc_set_value(s_face.c_steps_arc, sv);
         snprintf(buf, sizeof(buf), "%d", notif_count());
-        lv_label_set_text(s_face.c_notif_lbl, buf);
+        set_txt(s_face.c_notif_lbl, buf);
         const power_status_t *p = pwr();
         if (p->percent >= 0) {
             snprintf(buf, sizeof(buf), "%d%%", p->percent);
-            lv_arc_set_value(s_face.c_bat_arc, p->percent);
+            if (lv_arc_get_value(s_face.c_bat_arc) != p->percent) lv_arc_set_value(s_face.c_bat_arc, p->percent);
         } else {
             snprintf(buf, sizeof(buf), p->usb ? "USB" : "--");
         }
-        lv_label_set_text(s_face.c_bat_lbl, buf);
+        set_txt(s_face.c_bat_lbl, buf);
         char extra[48] = "";
         weather_t w;
         weather_get(&w);
@@ -345,7 +366,7 @@ void ui_home_refresh(void)
         } else if (alarm_next(next, sizeof(next))) {
             snprintf(extra, sizeof(extra), LV_SYMBOL_BELL " %s", next);
         }
-        lv_label_set_text(s_face.c_extra_lbl, extra);
+        set_txt(s_face.c_extra_lbl, extra);
     }
 }
 

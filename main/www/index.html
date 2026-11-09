@@ -281,7 +281,7 @@ const LABELS = { brightness:'Brightness %', screen_timeout_s:'Screen timeout (s,
   timezone:'Time zone (POSIX)', time_24h:'24-hour clock', auto_time:'Automatic time', wifi_on:'Wi-Fi', hotspot_on:'Hotspot', ap_ssid:'Hotspot name', ap_pass:'Hotspot password',
   hostname:'Hostname', bt_on:'Bluetooth', bt_name:'Bluetooth name', web_on:'Web manager', web_pass:'Web password', notif_on:'Phone notifications', notif_wake:'Wake on notification',
   dnd:'Do not disturb', dnd_scheduled:'Scheduled DND', dnd_start_min:'DND start (minutes after midnight)', dnd_end_min:'DND end (minutes)', power_save:'Power saving',
-  ota_repo:'Update repo (owner/name)', ota_token:'GitHub token', ota_auto_check:'Check for updates automatically', latitude:'Latitude', longitude:'Longitude', city:'City', step_goal:'Daily step goal' };
+  ota_repo:'Update repo (owner/name)', ota_token:'GitHub token', ota_auto_check:'Check for updates automatically', latitude:'Latitude', longitude:'Longitude', city:'City', step_goal:'Daily step goal', move_reminder:'Move reminder (hourly, 9-21 h)' };
 let settingsCache = {};
 async function loadSettings() {
   try { settingsCache = await get('/api/settings'); const f = $('sform'); f.innerHTML = '';

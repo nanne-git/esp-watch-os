@@ -13,7 +13,7 @@ static const char *TAG = "settings";
 
 #define NVS_NS        "watch"
 #define NVS_KEY       "settings"
-#define SETTINGS_VER  1
+#define SETTINGS_VER  2
 #define MAX_LISTENERS 12
 
 typedef struct {
@@ -30,7 +30,7 @@ static int               s_listener_count;
 static void set_defaults(settings_t *s)
 {
     memset(s, 0, sizeof(*s));
-    s->brightness = 70;
+    s->brightness = 50;
     s->screen_timeout_s = 15;
     s->raise_to_wake = true;
     s->always_on = false;
@@ -60,6 +60,7 @@ static void set_defaults(settings_t *s)
     s->longitude = 78.4867f;
     strcpy(s->city, "Hyderabad");
     s->step_goal = 8000;
+    s->move_reminder = true;
 }
 
 static void save(void)
@@ -171,7 +172,7 @@ static const field_t FIELDS[] = {
     FB(bt_on), FS(bt_name), FB(web_on), FSS(web_pass),
     FB(notif_on), FB(notif_wake), FB(dnd), FB(dnd_scheduled), FU16(dnd_start_min), FU16(dnd_end_min),
     FB(power_save), FS(ota_repo), FSS(ota_token), FB(ota_auto_check),
-    FF(latitude), FF(longitude), FS(city), FU16(step_goal),
+    FF(latitude), FF(longitude), FS(city), FU16(step_goal), FB(move_reminder),
 };
 
 cJSON *settings_to_json(void)

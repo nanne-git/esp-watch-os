@@ -7,6 +7,7 @@
 #include "esp_event.h"
 #include "esp_log.h"
 #include "esp_mac.h"
+#include "esp_timer.h"
 #include "esp_netif.h"
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
@@ -152,15 +153,45 @@ static void on_event(void *arg, esp_event_base_t base, int32_t id, void *data)
 
 /* ------------------------------------------------------------------ mode / power */
 
+/*
+ * Radio power: normally the station naps between router beacons (modem sleep) - this is
+ * the biggest power/heat saver. Power-saving mode naps longer. During web transfers /
+ * OTA downloads the radio stays awake (boost) and drops back 15 s after the last activity.
+ */
+static esp_timer_handle_t s_boost_timer;
+static volatile bool      s_boosted;
+
 static void apply_ps(void)
 {
-    esp_wifi_set_ps(settings()->power_save ? WIFI_PS_MIN_MODEM : WIFI_PS_NONE);
+    if (!s_started) return;
+    if (s_boosted) {
+        esp_wifi_set_ps(WIFI_PS_NONE);
+    } else {
+        esp_wifi_set_ps(settings()->power_save ? WIFI_PS_MAX_MODEM : WIFI_PS_MIN_MODEM);
+    }
+}
+
+static void boost_end(void *arg)
+{
+    s_boosted = false;
+    apply_ps();
 }
 
 void wifi_svc_set_high_throughput(bool on)
 {
-    if (s_started) {
-        esp_wifi_set_ps(on ? WIFI_PS_NONE : (settings()->power_save ? WIFI_PS_MIN_MODEM : WIFI_PS_NONE));
+    if (!s_boost_timer) {
+        const esp_timer_create_args_t ta = { .callback = boost_end, .name = "wifi_boost" };
+        esp_timer_create(&ta, &s_boost_timer);
+    }
+    esp_timer_stop(s_boost_timer);
+    if (on) {
+        if (!s_boosted) {
+            s_boosted = true;
+            apply_ps();
+        }
+        esp_timer_start_once(s_boost_timer, 15 * 1000000);   /* auto-off if nobody calls again */
+    } else {
+        boost_end(NULL);
     }
 }
 
@@ -204,7 +235,7 @@ static void apply_mode(void)
         esp_wifi_start();
         s_started = true;
         apply_ps();
-        esp_coex_preference_set(ESP_COEX_PREFER_WIFI);
+        esp_coex_preference_set(ESP_COEX_PREFER_BALANCE);
     }
     s_state = s->wifi_on ? (s_state == WIFI_ST_CONNECTED ? WIFI_ST_CONNECTED : WIFI_ST_IDLE) : WIFI_ST_OFF;
     start_mdns();
@@ -341,7 +372,7 @@ static void wifi_task(void *arg)
             nets_put(s_cur_ssid, nets_find(s_cur_ssid) ? nets_find(s_cur_ssid)->pass : "");
         } else {
             xEventGroupWaitBits(s_ev, EV_KICK, pdTRUE, pdFALSE, pdMS_TO_TICKS(backoff_s * 1000));
-            if (backoff_s < 60) {
+            if (backoff_s < 300) {          /* no known network around: scan rarely */
                 backoff_s *= 2;
             }
         }

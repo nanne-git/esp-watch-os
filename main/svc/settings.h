@@ -68,6 +68,7 @@ typedef struct {
     float    longitude;
     char     city[SETTINGS_STR_SHORT];
     uint16_t step_goal;
+    bool     move_reminder;       /* nudge after an hour without walking (09-21 h) */
 } settings_t;
 
 typedef void (*settings_cb_t)(void);

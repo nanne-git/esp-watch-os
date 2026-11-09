@@ -7,6 +7,7 @@
 #include "bsp/esp-bsp.h"
 #include "esp_log.h"
 #include "esp_lvgl_port.h"
+#include "esp_pm.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
@@ -38,6 +39,15 @@ static bool      s_dimmed_aod;
 static int64_t   s_wake_time;
 static lv_obj_t *s_call_ov, *s_alarm_ov, *s_notif_banner;
 static lv_timer_t *s_banner_timer;
+static esp_pm_lock_handle_t s_cpu_lock;   /* held while the screen is on */
+static bool s_cpu_locked;
+
+static void cpu_fast(bool on)
+{
+    if (!s_cpu_lock || on == s_cpu_locked) return;
+    s_cpu_locked = on;
+    if (on) esp_pm_lock_acquire(s_cpu_lock); else esp_pm_lock_release(s_cpu_lock);
+}
 
 lv_color_t ui_accent(void)
 {
@@ -219,6 +229,7 @@ bool ui_is_awake(void) { return s_awake; }
 static void do_wake(void)
 {
     if (!s_awake || s_dimmed_aod) {
+        cpu_fast(true);
         s_awake = true;
         s_dimmed_aod = false;
         s_wake_time = esp_timer_get_time();
@@ -238,6 +249,7 @@ static void do_sleep(void)
     }
     s_awake = false;
     ui_go_home();
+    cpu_fast(false);           /* screen off: let the CPU drop to 80 MHz */
     if (settings()->always_on) {
         s_dimmed_aod = true;
         ui_home_refresh();
@@ -726,6 +738,15 @@ static void on_settings(void)
     }
 }
 
+/* ======================================================================== touch haptics */
+
+static void touch_haptic_cb(lv_event_t *e)
+{
+    if (settings()->haptic_touch && settings()->vibration && s_awake) {
+        haptic_pulse(12);
+    }
+}
+
 /* ======================================================================== start */
 
 static void home_gesture_cb(lv_event_t *e)
@@ -749,6 +770,9 @@ static void home_long_press_cb(lv_event_t *e)
 void ui_start(void)
 {
     s_inj_q = xQueueCreate(32, sizeof(inj_point_t));
+    if (esp_pm_lock_create(ESP_PM_CPU_FREQ_MAX, 0, "ui", &s_cpu_lock) == ESP_OK) {
+        cpu_fast(true);
+    }
     if (!ui_lock()) {
         return;
     }
@@ -762,6 +786,13 @@ void ui_start(void)
     lv_obj_add_event_cb(s_home, home_long_press_cb, LV_EVENT_LONG_PRESSED, NULL);
     ui_home_build(s_home);
     lv_screen_load(s_home);
+
+    /* short buzz on every touch (Settings > Sound > Touch feedback) */
+    for (lv_indev_t *in = lv_indev_get_next(NULL); in; in = lv_indev_get_next(in)) {
+        if (lv_indev_get_type(in) == LV_INDEV_TYPE_POINTER) {
+            lv_indev_add_event_cb(in, touch_haptic_cb, LV_EVENT_PRESSED, NULL);
+        }
+    }
 
     lv_indev_t *inj = lv_indev_create();
     lv_indev_set_type(inj, LV_INDEV_TYPE_POINTER);

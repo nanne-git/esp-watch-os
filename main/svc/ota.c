@@ -216,6 +216,7 @@ static void install_task(void *arg)
                 if (p != s_st.progress) {
                     s_st.progress = p;
                     ui_on_data_changed();
+                    wifi_svc_set_high_throughput(true);    /* keep the radio awake */
                 }
             }
         }

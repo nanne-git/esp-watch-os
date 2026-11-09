@@ -114,6 +114,7 @@ static void pl_event(audio_player_cb_ctx_t *ctx)
     case AUDIO_PLAYER_CALLBACK_EVENT_IDLE:
         if (s_pstate != PLAYER_IDLE) {
             s_pstate = PLAYER_IDLE;
+            spk_close();
             if (!s_user_stop && s_done_cb) {
                 s_done_cb();          /* finished on its own: let the app play the next track */
             }
@@ -257,6 +258,7 @@ static void beep_task(void *arg)
             }
             memset(buf, 0, 256 * sizeof(int16_t));
             esp_codec_dev_write(s_spk, buf, 256 * sizeof(int16_t));
+            spk_close();                 /* power the codec + amplifier down again */
         }
         xSemaphoreGive(s_lock);
     }

@@ -84,6 +84,20 @@ static void fmt_bytes(uint64_t b, char *buf, size_t len)
     else snprintf(buf, len, "%.0f KB", b / 1024.0);
 }
 
+static void qr_card(lv_obj_t *c, const char *data, const char *caption)
+{
+    lv_obj_t *card = ui_card(c);
+    lv_obj_set_style_bg_color(card, lv_color_white(), 0);
+    lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(card, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_t *qr = lv_qrcode_create(card);
+    lv_qrcode_set_size(qr, 190);
+    lv_qrcode_set_dark_color(qr, lv_color_black());
+    lv_qrcode_set_light_color(qr, lv_color_white());
+    lv_qrcode_update(qr, data, strlen(data));
+    ui_label(card, caption, &lv_font_montserrat_14, 0x3A3A3C);
+}
+
 /* ======================================================================== Wi-Fi */
 
 static char s_join_ssid[33];
@@ -215,6 +229,10 @@ static void wifi_build(lv_obj_t *c, void *ctx)
         snprintf(cl, sizeof(cl), "%d connected", w.ap_clients);
         ui_row(c, NULL, 0, "Address", "192.168.4.1", NULL, NULL);
         ui_row(c, NULL, 0, "Clients", cl, NULL, NULL);
+        char wq[128];
+        snprintf(wq, sizeof(wq), "WIFI:T:%s;S:%s;P:%s;;", settings()->ap_pass[0] ? "WPA" : "nopass",
+                 settings()->ap_ssid, settings()->ap_pass);
+        qr_card(c, wq, "Scan with your phone camera to join");
     }
     ui_section(c, "NETWORK NAME");
     ui_row(c, NULL, 0, "Hostname", settings()->hostname, text_click, (void *)&tf_hostname);
@@ -269,6 +287,9 @@ static void web_build(lv_obj_t *c, void *ctx)
     ui_row(c, NULL, 0, "Or", host, NULL, NULL);
     ui_row(c, LV_SYMBOL_EYE_CLOSE, UI_ORANGE, "Password", settings()->web_pass[0] ? "set" : "none",
            text_click, (void *)&tf_web_pass);
+    if (url[0]) {
+        qr_card(c, url, "Scan to open the web manager");
+    }
     lv_obj_t *card = ui_card(c);
     lv_obj_t *t = ui_label(card,
                            "Open the address in a browser on the same Wi-Fi (or the watch "
@@ -382,6 +403,7 @@ static void sound_build(lv_obj_t *c, void *ctx)
     lv_obj_add_event_cb(sl, vol_release, LV_EVENT_RELEASED, NULL);
     toggle(c, LV_SYMBOL_MUTE, UI_RED, "Mute", OFF(muted));
     toggle(c, LV_SYMBOL_BELL, UI_ORANGE, "Vibration", OFF(vibration));
+    toggle(c, LV_SYMBOL_OK, UI_PURPLE, "Touch feedback", OFF(haptic_touch));
     ui_row(c, LV_SYMBOL_AUDIO, UI_PINK, "Test speaker", NULL, test_beep, NULL);
     ui_row(c, LV_SYMBOL_BELL, UI_PURPLE, "Test vibration", NULL, test_vib, NULL);
 }
@@ -684,6 +706,7 @@ static void activity_build(lv_obj_t *c, void *ctx)
     char b[24];
     snprintf(b, sizeof(b), "%u steps", settings()->step_goal);
     ui_row(c, LV_SYMBOL_SHUFFLE, UI_GREEN, "Daily goal", b, goal_click, NULL);
+    toggle(c, LV_SYMBOL_BELL, UI_ORANGE, "Move reminder", OFF(move_reminder));
     ui_row(c, LV_SYMBOL_TRASH, UI_ORANGE, "Reset today's steps", NULL, reset_steps_click, NULL);
 }
 

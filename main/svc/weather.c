@@ -18,6 +18,7 @@ static const char *TAG = "weather";
 
 static weather_t    s_w;
 static TaskHandle_t s_task;
+static bool         s_from_net;      /* current data came from open-meteo */
 
 void weather_get(weather_t *out) { *out = s_w; }
 
@@ -33,6 +34,43 @@ const char *weather_desc(int c)
     if (c >= 80 && c <= 82) return "Showers";
     if (c >= 95) return "Thunderstorm";
     return "--";
+}
+
+/* OpenWeatherMap condition code (Gadgetbridge) -> WMO code (open-meteo) */
+static int owm_to_wmo(int c)
+{
+    if (c >= 200 && c < 300) return 95;
+    if (c >= 300 && c < 400) return 51;
+    if (c >= 500 && c < 600) return c >= 520 ? 80 : 61;
+    if (c >= 600 && c < 700) return 71;
+    if (c >= 700 && c < 800) return 45;
+    if (c == 800) return 0;
+    if (c == 801 || c == 802) return 2;
+    return 3;
+}
+
+void weather_set_from_phone(float temp_c, int owm_code, int humidity, float wind_kmh, float hi_c, float lo_c)
+{
+    /* fresh internet data (< 1 h) wins; otherwise take the phone's */
+    if (s_from_net && time(NULL) - s_w.updated < 3600) {
+        return;
+    }
+    weather_t w = s_w;
+    w.valid = true;
+    w.temp_c = temp_c;
+    w.feels_c = temp_c;
+    w.code = owm_to_wmo(owm_code);
+    w.humidity = humidity;
+    w.wind_kmh = wind_kmh;
+    w.tmax = hi_c;
+    w.tmin = lo_c;
+    w.daily_code[0] = w.code;
+    w.daily_max[0] = hi_c;
+    w.daily_min[0] = lo_c;
+    w.updated = time(NULL);
+    s_w = w;
+    s_from_net = false;
+    ui_on_data_changed();
 }
 
 static bool fetch(void)
@@ -93,6 +131,7 @@ static bool fetch(void)
         w.updated = time(NULL);
         w.valid = true;
         s_w = w;
+        s_from_net = true;
         ok = true;
         ESP_LOGI(TAG, "%.1f C, %s", w.temp_c, weather_desc(w.code));
     }

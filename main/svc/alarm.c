@@ -11,6 +11,7 @@
 #include "freertos/task.h"
 #include "hw.h"
 #include "nvs.h"
+#include "phone.h"
 #include "settings.h"
 #include "timesvc.h"
 #include "ui.h"
@@ -253,6 +254,49 @@ int sw_laps(int64_t *out, int max)
     return n;
 }
 
+/* ------------------------------------------------------------------ minute checks */
+
+/* move reminder (no ~50 steps in the last hour, 09:00-21:00) and low battery warnings */
+static void minute_checks(const struct tm *lt)
+{
+    static uint32_t steps_hour_ago;
+    static int      minutes_still;
+    static int      warned_level = 101;
+    uint32_t st = imu_steps_today();
+    if (st < steps_hour_ago) steps_hour_ago = st;            /* midnight reset */
+    if (st - steps_hour_ago >= 50) {
+        steps_hour_ago = st;
+        minutes_still = 0;
+    } else {
+        minutes_still++;
+    }
+    if (settings()->move_reminder && minutes_still >= 60 && lt->tm_hour >= 9 && lt->tm_hour < 21 &&
+        !notif_dnd_active()) {
+        minutes_still = 0;
+        steps_hour_ago = st;
+        if (settings()->vibration) {
+            static const uint16_t p[] = { 200, 150, 200 };
+            haptic_pattern(p, 3);
+        }
+        ui_toast("Time to move - you've been still for an hour");
+    }
+
+    power_status_t pw;
+    power_get(&pw);
+    if (pw.percent < 0 || pw.usb) {
+        warned_level = 101;                                  /* charging: re-arm warnings */
+        return;
+    }
+    int level = pw.percent <= 5 ? 5 : pw.percent <= 15 ? 15 : 101;
+    if (level < warned_level) {
+        warned_level = level;
+        char m[64];
+        snprintf(m, sizeof(m), "Battery low: %d %%%s", pw.percent, level == 5 ? " - charge now" : "");
+        ui_toast(m);
+        if (settings()->vibration) haptic_pulse(300);
+    }
+}
+
 /* ------------------------------------------------------------------ checker task */
 
 static void alarm_task(void *arg)
@@ -294,6 +338,7 @@ static void alarm_task(void *arg)
             continue;
         }
         last_min = m;
+        minute_checks(&lt);
         for (int i = 0; i < s_count; i++) {
             alarm_t *a = &s_alarms[i];
             if (!a->enabled || a->hour != lt.tm_hour || a->min != lt.tm_min) {

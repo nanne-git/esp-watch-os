@@ -70,6 +70,10 @@ static void axp_init(i2c_master_bus_handle_t bus)
     axp_write(AXP_ADC_EN, v | 0x01 | 0x10);          /* battery voltage + die temp ADC */
     axp_read(AXP_GAUGE_CFG, &v, 1);
     axp_write(AXP_GAUGE_CFG, v | 0x08);              /* fuel gauge on */
+    /* charge gently: 300 mA constant current (reg 0x62: 9 = 300 mA) keeps the battery and
+     * the power chip cooler while on USB; 4.2 V target is the chip default */
+    axp_read(0x62, &v, 1);
+    axp_write(0x62, (v & ~0x1F) | 9);
     ESP_LOGI(TAG, "AXP2101 ready");
 }
 
@@ -332,7 +336,7 @@ void hw_init(void)
 
     if (qmi8658_init(&s_imu, bus, QMI8658_ADDRESS_HIGH) == ESP_OK) {
         qmi8658_set_accel_range(&s_imu, QMI8658_ACCEL_RANGE_8G);
-        qmi8658_set_accel_odr(&s_imu, QMI8658_ACCEL_ODR_125HZ);
+        qmi8658_set_accel_odr(&s_imu, QMI8658_ACCEL_ODR_31_25HZ);   /* we read at 25 Hz */
         qmi8658_enable_accel(&s_imu, true);
         s_imu_ok = true;
         xTaskCreate(imu_task, "imu", 3072, NULL, 3, NULL);

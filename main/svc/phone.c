@@ -30,12 +30,14 @@
 #include "settings.h"
 #include "timesvc.h"
 #include "ui.h"
+#include "weather.h"
 
 static const char *TAG = "phone";
 
 static notif_t         s_notifs[NOTIF_MAX];
 static int             s_notif_count;
 static call_t          s_call;
+static bool            s_call_answered, s_call_user_ended;
 static phone_music_t   s_music;
 static SemaphoreHandle_t s_lock;
 
@@ -150,6 +152,8 @@ void call_set_incoming(const char *name, const char *number)
 {
     lock();
     s_call.active = true;
+    s_call_answered = false;
+    s_call_user_ended = false;
     strlcpy(s_call.name, name && *name ? name : "Unknown", sizeof(s_call.name));
     strlcpy(s_call.number, number ? number : "", sizeof(s_call.number));
     unlock();
@@ -164,11 +168,20 @@ void call_end(void)
 {
     lock();
     bool was = s_call.active;
+    call_t c = s_call;
     s_call.active = false;
     unlock();
     haptic_stop();
     if (was) {
         ui_on_call(false);
+        if (!s_call_answered && !s_call_user_ended) {        /* rang out: missed call */
+            notif_t n = { 0 };
+            n.id = esp_random();
+            strlcpy(n.app, "Phone", sizeof(n.app));
+            strlcpy(n.title, "Missed call", sizeof(n.title));
+            snprintf(n.body, sizeof(n.body), "%s %s", c.name, c.number);
+            notif_add(&n);
+        }
     }
 }
 
@@ -200,6 +213,11 @@ static void send_tn(const char *t, const char *n)
 void call_action(const char *action)
 {
     send_tn("call", action);
+    if (strcmp(action, "ACCEPT") == 0) {
+        s_call_answered = true;
+    } else {
+        s_call_user_ended = true;
+    }
     if (strcmp(action, "ACCEPT") != 0) {
         call_end();
     } else {
@@ -304,6 +322,7 @@ static void handle_gb(cJSON *o)
         if (strcmp(cmd, "incoming") == 0) {
             call_set_incoming(jstr(o, "name"), jstr(o, "number"));
         } else if (strcmp(cmd, "start") == 0 || strcmp(cmd, "accept") == 0) {
+            s_call_answered = true;
             haptic_stop();
         } else {
             call_end();                  /* end / reject / outgoing finished */
@@ -312,6 +331,12 @@ static void handle_gb(cJSON *o)
         phone_music_set_info(jstr(o, "artist"), jstr(o, "track"), (int)jnum(o, "dur", 0));
     } else if (strcmp(t, "musicstate") == 0) {
         phone_music_set_state(strcmp(jstr(o, "state"), "play") == 0, (int)jnum(o, "position", 0));
+    } else if (strcmp(t, "weather") == 0) {
+        double k = jnum(o, "temp", 0);
+        if (k > 150) {
+            weather_set_from_phone(k - 273.15, (int)jnum(o, "code", 800), (int)jnum(o, "hum", 0),
+                                   jnum(o, "wind", 0), jnum(o, "hi", k) - 273.15, jnum(o, "lo", k) - 273.15);
+        }
     } else if (strcmp(t, "find") == 0) {
         const cJSON *n = cJSON_GetObjectItemCaseSensitive(o, "n");
         if (cJSON_IsTrue(n)) {
