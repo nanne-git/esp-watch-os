@@ -49,7 +49,7 @@ void app_open_file(const char *abs_path)
 {
     static const char *audio[] = { ".mp3", ".wav", NULL };
     static const char *image[] = { ".jpg", ".jpeg", ".png", ".bmp", NULL };
-    static const char *video[] = { ".mjpeg", ".mjpg", ".avi", NULL };
+    static const char *video[] = { ".mjpeg", ".mjpg", ".avi", ".mp4", ".mov", NULL };
     static const char *text[] = { ".txt", ".log", ".md", ".csv", ".json", ".ini", ".cfg", NULL };
     if (ext_is(abs_path, audio)) {
         music_open_file(abs_path);
