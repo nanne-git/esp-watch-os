@@ -249,7 +249,7 @@ static void beep_task(void *arg)
                 for (int i = 0; i < 256; i++) {
                     /* square-ish tone is louder on a small speaker; soft edges avoid clicks */
                     float env = (done + i < 400) ? (done + i) / 400.0f : 1.0f;
-                    buf[i] = (int16_t)(sinf(phase) > 0 ? 9000 * env : -9000 * env);
+                    buf[i] = (int16_t)(sinf(phase) > 0 ? 3000 * env : -3000 * env);
                     phase += step;
                     if (phase > 2 * (float)M_PI) phase -= 2 * (float)M_PI;
                 }

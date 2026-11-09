@@ -351,7 +351,11 @@ static void wifi_task(void *arg)
 void wifi_svc_connect(const char *ssid, const char *pass)
 {
     strlcpy(s_pending_ssid, ssid, sizeof(s_pending_ssid));
-    strlcpy(s_pending_pass, pass ? pass : "", sizeof(s_pending_pass));
+    if (!pass) {                       /* NULL: reuse the saved password */
+        saved_net_t *n = nets_find(ssid);
+        pass = n ? n->pass : "";
+    }
+    strlcpy(s_pending_pass, pass, sizeof(s_pending_pass));
     s_pending = true;
     if (s_state == WIFI_ST_CONNECTED) {
         esp_wifi_disconnect();

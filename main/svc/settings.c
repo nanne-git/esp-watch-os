@@ -36,7 +36,7 @@ static void set_defaults(settings_t *s)
     s->always_on = false;
     s->watchface = 0;
     s->accent_color = 0x4C9AFF;
-    s->volume = 60;
+    s->volume = 10;              /* quiet by default */
     s->vibration = true;
     s->haptic_touch = false;
     strcpy(s->timezone, "IST-5:30");

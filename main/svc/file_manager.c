@@ -897,6 +897,18 @@ bool fm_card_info(char *name, size_t name_size, uint64_t *total_bytes, uint64_t 
     return esp_vfs_fat_info(MOUNT_POINT, total_bytes, free_bytes) == ESP_OK;
 }
 
+bool fm_mount(void) { return sd_mount(); }
+void fm_unmount(void) { sd_unmount(); }
+
+bool fm_format(void)
+{
+    if (!s_card) {
+        return false;
+    }
+    snprintf(s_cwd, sizeof(s_cwd), "%s", MOUNT_POINT);
+    return esp_vfs_fat_sdcard_format(MOUNT_POINT, s_card) == ESP_OK;
+}
+
 void file_manager_start(fm_send_fn_t ble_send)
 {
     s_ble_send = ble_send;

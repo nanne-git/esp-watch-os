@@ -38,4 +38,8 @@ bool fm_copy_recursive(const char *src_abs, const char *dst_abs);
 /* Delete a file or a whole folder with everything inside it. Returns 0 on success. */
 int fm_remove_recursive(const char *abs_path);
 
+bool fm_mount(void);
+void fm_unmount(void);
+bool fm_format(void);          /* erases the whole card (FAT) */
+
 bool fm_card_info(char *name, size_t name_size, uint64_t *total_bytes, uint64_t *free_bytes);
