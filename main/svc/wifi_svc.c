@@ -159,6 +159,9 @@ static void on_event(void *arg, esp_event_base_t base, int32_t id, void *data)
         xEventGroupSetBits(s_ev, EV_GOT_IP);
         ui_on_data_changed();
     } else if (base == WIFI_EVENT &&
+               (id == WIFI_EVENT_AP_START || id == WIFI_EVENT_AP_STOP)) {
+        s_ap_clients = 0;                /* fresh count whenever the hotspot (re)starts/stops */
+    } else if (base == WIFI_EVENT &&
                (id == WIFI_EVENT_AP_STACONNECTED || id == WIFI_EVENT_AP_STADISCONNECTED)) {
         s_ap_clients += id == WIFI_EVENT_AP_STACONNECTED ? 1 : -1;
         if (s_ap_clients < 0) s_ap_clients = 0;
@@ -244,7 +247,15 @@ static void apply_mode(void)
         ap.ap.ssid_len = strlen(s->ap_ssid);
         ap.ap.channel = 6;
         ap.ap.max_connection = 4;
-        ap.ap.authmode = strlen(s->ap_pass) >= 8 ? WIFI_AUTH_WPA2_PSK : WIFI_AUTH_OPEN;
+        size_t pl = strlen(s->ap_pass);
+        if (pl > 0 && pl < 8) {
+            /* WPA2 needs 8+ characters; never silently turn a "protected" hotspot into an open one */
+            ESP_LOGE(TAG, "hotspot password too short (%u chars) - using the default", (unsigned)pl);
+            strlcpy((char *)ap.ap.password, "watchfiles", sizeof(ap.ap.password));
+            pl = 10;
+            ui_toast("Hotspot password must be 8+ characters");
+        }
+        ap.ap.authmode = pl >= 8 ? WIFI_AUTH_WPA2_PSK : WIFI_AUTH_OPEN;
         esp_wifi_set_config(WIFI_IF_AP, &ap);
     }
     if (!s_started) {
@@ -369,6 +380,13 @@ static void hotspot_idle_check(void *arg)
     }
 }
 
+static void hotspot_off_async(void *arg)
+{
+    settings_edit()->hotspot_on = false;
+    settings_commit();
+    ui_toast("Hotspot turned off (not used)");
+}
+
 static void wifi_task(void *arg)
 {
     int backoff_s = 5;
@@ -381,9 +399,12 @@ static void wifi_task(void *arg)
         if (s_hotspot_idle_off) {
             s_hotspot_idle_off = false;
             ESP_LOGI(TAG, "hotspot unused for %d min - turning it off", HOTSPOT_IDLE_MIN);
-            settings_edit()->hotspot_on = false;
-            settings_commit();
-            ui_toast("Hotspot turned off (not used)");
+            /* settings_commit runs every listener (Wi-Fi mode change, UI...) on the calling
+             * task: do it on the UI task with its 12 KB stack, not on this 4 KB one */
+            if (ui_lock()) {
+                lv_async_call(hotspot_off_async, NULL);
+                ui_unlock();
+            }
         }
         if (!s_started || !settings()->wifi_on) {
             xEventGroupWaitBits(s_ev, EV_KICK, pdTRUE, pdFALSE, pdMS_TO_TICKS(5000));

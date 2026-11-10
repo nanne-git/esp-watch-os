@@ -240,8 +240,34 @@ static void apply_brightness(void)
 
 bool ui_is_awake(void) { return s_awake; }
 
+/* While the screen is off, a full-screen "shield" on the system layer swallows every touch:
+ * the first touch only wakes the watch and can't press whatever is under it (e.g. a "Power
+ * off" confirm left open, or a swipe opening apps in a pocket). */
+static lv_obj_t *s_shield;
+static void do_wake(void);
+
+static void shield_cb(lv_event_t *e)
+{
+    do_wake();
+}
+
+static void shield_set(bool on)
+{
+    if (on && !s_shield) {
+        s_shield = lv_obj_create(lv_layer_sys());
+        lv_obj_remove_style_all(s_shield);
+        lv_obj_set_size(s_shield, UI_W, UI_H);
+        lv_obj_add_flag(s_shield, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(s_shield, shield_cb, LV_EVENT_PRESSED, NULL);
+    } else if (!on && s_shield) {
+        lv_obj_delete(s_shield);       /* safe even from inside its own PRESSED event */
+        s_shield = NULL;
+    }
+}
+
 static void do_wake(void)
 {
+    shield_set(false);
     if (!s_awake || s_dimmed_aod) {
         cpu_fast(true);
         s_awake = true;
@@ -263,6 +289,12 @@ static void do_sleep(void)
     }
     s_awake = false;
     go_home(false);            /* instant switch: no slide animation into a dark screen */
+    /* close leftover confirm dialogs (marked USER_4 by ui_confirm) */
+    for (int i = (int)lv_obj_get_child_count(lv_layer_top()) - 1; i >= 0; i--) {
+        lv_obj_t *o = lv_obj_get_child(lv_layer_top(), i);
+        if (lv_obj_has_flag(o, LV_OBJ_FLAG_USER_4)) lv_obj_delete(o);
+    }
+    shield_set(true);
     cpu_fast(false);           /* screen off: let the CPU drop to 80 MHz */
     if (settings()->always_on) {
         s_dimmed_aod = true;
@@ -303,7 +335,11 @@ void ui_keep_awake(bool on)
 typedef struct {
     ui_bg_fn_t work, done;
     void      *ctx;
+    int        depth;          /* page stack when the job started */
+    lv_obj_t  *top;
 } bg_job_t;
+
+static bg_job_t s_bg_done_job;
 
 static QueueHandle_t s_bg_queue;
 static lv_obj_t     *s_busy_ov;
@@ -317,6 +353,20 @@ static void busy_hide(void)
     }
 }
 
+static void bg_done_async(void *arg)
+{
+    bg_job_t j = s_bg_done_job;
+    busy_hide();
+    s_bg_busy = false;
+    ui_keep_awake(false);
+    lv_obj_t *top = s_depth ? s_pages[s_depth - 1].scr : NULL;
+    if (j.depth != s_depth || j.top != top) {
+        ui_toast("Done");                 /* the user left that screen: don't touch another one */
+        return;
+    }
+    if (j.done) j.done(j.ctx);
+}
+
 static void bg_task(void *arg)
 {
     bg_job_t j;
@@ -324,9 +374,9 @@ static void bg_task(void *arg)
         if (xQueueReceive(s_bg_queue, &j, portMAX_DELAY) != pdTRUE) continue;
         if (j.work) j.work(j.ctx);              /* no UI lock held: the screen stays live */
         if (ui_lock()) {
-            busy_hide();
-            s_bg_busy = false;
-            if (j.done) j.done(j.ctx);
+            /* run done() on the LVGL task (12 KB stack) - it usually builds a whole page */
+            s_bg_done_job = j;
+            lv_async_call(bg_done_async, NULL);
             ui_unlock();
         } else {
             s_bg_busy = false;
@@ -365,7 +415,8 @@ bool ui_run_bg(const char *busy_msg, ui_bg_fn_t work, ui_bg_fn_t done, void *ctx
         ui_unlock();
     }
     s_bg_busy = true;
-    bg_job_t j = { work, done, ctx };
+    ui_keep_awake(true);                  /* don't let the screen sleep (and go home) mid-job */
+    bg_job_t j = { work, done, ctx, s_depth, s_depth ? s_pages[s_depth - 1].scr : NULL };
     xQueueSend(s_bg_queue, &j, portMAX_DELAY);
     return true;
 }
@@ -657,12 +708,22 @@ static void inj_read_cb(lv_indev_t *indev, lv_indev_data_t *data)
     data->point.y = cur.y;
     data->state = cur.pressed ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
     data->continue_reading = false;
+    /* nothing queued and released: stop polling (saves 30 wake-ups/s, even with screen off) */
+    if (remaining <= 0 && !cur.pressed && uxQueueMessagesWaiting(s_inj_q) == 0) {
+        lv_timer_pause(lv_indev_get_read_timer(indev));
+    }
 }
+
+static lv_indev_t *s_inj;
 
 static void inj_push(int x, int y, bool pressed, int hold)
 {
     inj_point_t p = { .x = x, .y = y, .pressed = pressed, .hold = hold };
     xQueueSend(s_inj_q, &p, pdMS_TO_TICKS(100));
+    if (s_inj && ui_lock()) {
+        lv_timer_resume(lv_indev_get_read_timer(s_inj));
+        ui_unlock();
+    }
 }
 
 void ui_inject_tap(int x, int y)
@@ -805,6 +866,8 @@ static void on_button(button_id_t id, button_event_t ev)
     if (!was_asleep) {
         if (id == BTN_PWR && ev == BTN_LONG) {
             ui_open_power_menu();
+        } else if (id == BTN_BOOT && s_bg_busy) {
+            /* a background job is running: keep the screen it will report back to */
         } else if (id == BTN_BOOT && ev == BTN_SHORT) {
             if (s_depth > 0) {
                 ui_page_pop();
@@ -898,6 +961,8 @@ void ui_start(void)
     lv_indev_t *inj = lv_indev_create();
     lv_indev_set_type(inj, LV_INDEV_TYPE_POINTER);
     lv_indev_set_read_cb(inj, inj_read_cb);
+    s_inj = inj;
+    lv_timer_pause(lv_indev_get_read_timer(inj));
 
     lv_timer_create(tick_cb, 250, NULL);
     apply_brightness();

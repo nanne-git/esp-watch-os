@@ -155,7 +155,10 @@ void ota_check_async(void)
 {
     if (s_busy) return;
     s_busy = true;
-    xTaskCreate(check_task, "ota_check", 8192, (void *)0, 3, NULL);
+    if (xTaskCreate(check_task, "ota_check", 8192, (void *)0, 3, NULL) != pdPASS) {
+        set_state(OTA_ERROR, "out of memory - try again");
+        s_busy = false;
+    }
 }
 
 /* ------------------------------------------------------------------ install */
@@ -165,7 +168,10 @@ static char s_location[1024];
 static esp_err_t loc_event(esp_http_client_event_t *e)
 {
     if (e->event_id == HTTP_EVENT_ON_HEADER && strcasecmp(e->header_key, "Location") == 0) {
-        strlcpy(s_location, e->header_value, sizeof(s_location));
+        if (strlcpy(s_location, e->header_value, sizeof(s_location)) >= sizeof(s_location)) {
+            ESP_LOGE(TAG, "download link too long (%u bytes)", (unsigned)strlen(e->header_value));
+            s_location[0] = '\0';                 /* better a clear error than a cut-off URL */
+        }
     }
     return ESP_OK;
 }
@@ -248,10 +254,16 @@ void ota_install_async(void)
     s_busy = true;
     if (!s_st.update_available || !s_asset_url[0]) {
         /* check first, then install */
-        xTaskCreate(check_task, "ota_check", 8192, (void *)1, 3, NULL);
+        if (xTaskCreate(check_task, "ota_check", 8192, (void *)1, 3, NULL) != pdPASS) {
+            set_state(OTA_ERROR, "out of memory - try again");
+            s_busy = false;
+        }
         return;
     }
-    xTaskCreate(install_task, "ota_inst", 8192, NULL, 3, NULL);
+    if (xTaskCreate(install_task, "ota_inst", 8192, NULL, 3, NULL) != pdPASS) {
+        set_state(OTA_ERROR, "out of memory - try again");
+        s_busy = false;
+    }
 }
 
 /* ------------------------------------------------------------------ browser upload */

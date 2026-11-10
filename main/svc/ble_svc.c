@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "esp_log.h"
+#include "esp_heap_caps.h"
 #include "esp_timer.h"
 #include "file_manager.h"
 #include "freertos/FreeRTOS.h"
@@ -134,7 +135,7 @@ bool ble_svc_send(const void *data, size_t len)
         len = TX_LINE_MAX;
     }
     /* worst case every byte is a '\n' that becomes "\r\n", plus the final "\r\n" */
-    char *out = malloc(len * 2 + 2);
+    char *out = heap_caps_malloc(len * 2 + 2, MALLOC_CAP_SPIRAM);   /* not scarce internal RAM */
     if (!out) {
         return false;
     }

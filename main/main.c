@@ -19,6 +19,7 @@
 #include "esp_netif.h"
 #include "esp_ota_ops.h"
 #include "esp_pm.h"
+#include "esp_system.h"
 #include "file_manager.h"
 #include "hw.h"
 #include "nvs_flash.h"
@@ -142,7 +143,9 @@ void app_main(void)
 
     lv_display_t *d = display_start();
     if (!d) {
-        ESP_LOGE(TAG, "display start failed");
+        ESP_LOGE(TAG, "display start failed - restarting");
+        vTaskDelay(pdMS_TO_TICKS(2000));
+        esp_restart();               /* never run the UI without a display (would crash-loop) */
     }
     bsp_display_brightness_set(settings()->brightness);
 

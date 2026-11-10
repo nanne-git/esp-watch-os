@@ -91,6 +91,7 @@ static void follow_log(int s)
         if (r == 0 || (r < 0 && errno != EAGAIN && errno != EWOULDBLOCK)) break;
         if (r == 1 && (c == '\r' || c == '\n')) break;
     }
+    tv.tv_sec = 120;                 /* back to the session timeout (0 would mean "forever") */
     tv.tv_usec = 0;
     setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 out:
@@ -170,6 +171,14 @@ static void console_task(void *arg)
             int s = accept(ls, (struct sockaddr *)&peer, &plen);
             if (s < 0) break;
             setsockopt(s, IPPROTO_TCP, TCP_NODELAY, &yes, sizeof(yes));
+            /* a silent or vanished client must not block the (single) console forever */
+            struct timeval tv = { .tv_sec = 120 };
+            setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+            setsockopt(s, SOL_SOCKET, SO_KEEPALIVE, &yes, sizeof(yes));
+            int idle = 30, intvl = 10, cnt = 3;
+            setsockopt(s, IPPROTO_TCP, TCP_KEEPIDLE, &idle, sizeof(idle));
+            setsockopt(s, IPPROTO_TCP, TCP_KEEPINTVL, &intvl, sizeof(intvl));
+            setsockopt(s, IPPROTO_TCP, TCP_KEEPCNT, &cnt, sizeof(cnt));
             ESP_LOGI(TAG, "client connected");
             session(s);
             shutdown(s, SHUT_RDWR);

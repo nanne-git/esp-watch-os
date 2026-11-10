@@ -170,6 +170,7 @@ bool alarm_next(char *buf, size_t len)
 
 static void ring(const char *label)
 {
+    player_stop();               /* the alarm must be heard over (or instead of) music */
     strlcpy(s_ring_label, label, sizeof(s_ring_label));
     s_ringing = true;
     ESP_LOGI(TAG, "ringing: %s", label);

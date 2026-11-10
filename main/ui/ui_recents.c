@@ -184,7 +184,10 @@ static void refresh(void *ctx)
 {
     char st[40];
     for (int i = 0; i < s_n; i++) {      /* only the status text changes: no rebuild */
-        if (s_status[i]) lv_label_set_text(s_status[i], status_of(&s_rec[i], st, sizeof(st)));
+        if (s_status[i]) {
+            status_of(&s_rec[i], st, sizeof(st));
+            if (strcmp(lv_label_get_text(s_status[i]), st) != 0) lv_label_set_text(s_status[i], st);
+        }
     }
 }
 

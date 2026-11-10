@@ -155,6 +155,7 @@ def app_files(folder):
 def http(method, path, data=None):
     host = os.environ["WATCH_HOST"]
     req = urllib.request.Request(f"http://{host}{path}", data=data, method=method)
+    req.add_header("X-Watch", "1")          # the watch rejects POSTs without it (CSRF guard)
     pw = os.environ.get("WATCH_PASS")
     if pw:
         req.add_header("Authorization", "Basic " + base64.b64encode(f"admin:{pw}".encode()).decode())

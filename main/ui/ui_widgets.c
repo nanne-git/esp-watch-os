@@ -89,8 +89,8 @@ lv_obj_t *ui_row(lv_obj_t *parent, const char *icon, uint32_t icon_color, const 
 void ui_row_set_value(lv_obj_t *row, const char *value)
 {
     lv_obj_t *v = lv_obj_find_by_name(row, "value");
-    if (v) {
-        lv_label_set_text(v, value);
+    if (v && strcmp(lv_label_get_text(v), value ? value : "") != 0) {   /* no redraw if unchanged */
+        lv_label_set_text(v, value ? value : "");
     }
 }
 
@@ -280,6 +280,7 @@ void ui_confirm(const char *title, const char *msg, const char *yes_text, uint32
     c->user = user;
     lv_obj_t *ov = lv_obj_create(lv_layer_top());
     c->ov = ov;
+    lv_obj_add_flag(ov, LV_OBJ_FLAG_USER_4);     /* "dialog": closed when the screen sleeps */
     lv_obj_remove_style_all(ov);
     lv_obj_set_size(ov, UI_W, UI_H);
     lv_obj_set_style_bg_color(ov, lv_color_black(), 0);

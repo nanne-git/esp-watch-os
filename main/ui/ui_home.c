@@ -256,7 +256,8 @@ static void face_rebuild(lv_obj_t *scr, int face, bool aod)
     for (uint32_t i = 0; i < lv_obj_get_child_count(r); i++) {
         lv_obj_add_flag(lv_obj_get_child(r, i), LV_OBJ_FLAG_EVENT_BUBBLE | LV_OBJ_FLAG_GESTURE_BUBBLE);
         lv_obj_remove_flag(lv_obj_get_child(r, i), LV_OBJ_FLAG_CLICKABLE);
-    }    lv_obj_invalidate(scr);     /* normal <-> always-on: repaint every pixel */
+    }
+    lv_obj_invalidate(scr);     /* normal <-> always-on: repaint every pixel */
 }
 
 static void set_needle(lv_obj_t *line, lv_point_precise_t *pts, float angle_deg, int len, int tail)
@@ -267,6 +268,14 @@ static void set_needle(lv_obj_t *line, lv_point_precise_t *pts, float angle_deg,
     pts[0].y = cy - sinf(a) * tail;
     pts[1].x = cx + cosf(a) * len;
     pts[1].y = cy + sinf(a) * len;
+    /* An lv_line is sized from (0,0) to its largest point, so a hand drawn in scale
+     * coordinates made a ~340x340 object and every tick redrew half the screen. Shift the
+     * points to the hand's own bounding box and move the object there instead. */
+    lv_value_precise_t x0 = pts[0].x < pts[1].x ? pts[0].x : pts[1].x;
+    lv_value_precise_t y0 = pts[0].y < pts[1].y ? pts[0].y : pts[1].y;
+    pts[0].x -= x0; pts[1].x -= x0;
+    pts[0].y -= y0; pts[1].y -= y0;
+    lv_obj_set_pos(line, (int32_t)x0, (int32_t)y0);
     lv_line_set_points(line, pts, 2);
 }
 
@@ -284,7 +293,7 @@ void ui_home_refresh(void)
     if (!s_home_scr) {
         return;
     }
-    bool aod = !ui_is_awake();
+    bool aod = !ui_is_awake() && settings()->always_on;   /* screen fully off: keep the normal face */
     if (s_face.face != settings()->watchface || s_face.aod != aod) {
         face_rebuild(s_home_scr, settings()->watchface, aod);
     }
@@ -562,7 +571,7 @@ static void qs_refresh(void *ctx)
     status_text(st, sizeof(st));
     snprintf(buf, sizeof(buf), "%s\n%s", st,
              w.state == WIFI_ST_CONNECTED ? w.ip : (w.ap_on ? "Hotspot 192.168.4.1" : "Wi-Fi not connected"));
-    lv_label_set_text(s_qs_info, buf);
+    set_txt(s_qs_info, buf);
 }
 
 static void qs_build(lv_obj_t *c, void *ctx)
@@ -666,12 +675,13 @@ static void notif_clear_cb(lv_event_t *e)
 }
 
 static int s_notif_shown = -1;
+static uint32_t s_notif_gen_shown;
 
 static void notif_list_build(lv_obj_t *c, void *ctx);
 
 static void notif_refresh(void *ctx)
 {
-    if (notif_count() != s_notif_shown) {
+    if (notif_generation() != s_notif_gen_shown) {     /* count alone misses replacements */
         ui_page_rebuild();
     }
 }
@@ -680,6 +690,7 @@ static void notif_list_build(lv_obj_t *c, void *ctx)
 {
     int n = notif_count();
     s_notif_shown = n;
+    s_notif_gen_shown = notif_generation();
     if (n == 0) {
         lv_obj_t *l = ui_label(c, LV_SYMBOL_BELL "\n\nNo notifications", &lv_font_montserrat_20, UI_MUTED);
         lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
@@ -742,7 +753,7 @@ static void widgets_refresh(void *ctx)
     }
     char buf[128];
     snprintf(buf, sizeof(buf), "%lu / %u steps", (unsigned long)imu_steps_today(), settings()->step_goal);
-    lv_label_set_text(s_w_steps, buf);
+    set_txt(s_w_steps, buf);
     weather_t w;
     weather_get(&w);
     if (w.valid) {
@@ -751,18 +762,18 @@ static void widgets_refresh(void *ctx)
     } else {
         snprintf(buf, sizeof(buf), "%s: weather needs Wi-Fi", settings()->city);
     }
-    lv_label_set_text(s_w_weather, buf);
+    set_txt(s_w_weather, buf);
     phone_music_t m;
     phone_music_get(&m);
     snprintf(buf, sizeof(buf), "%s", m.valid ? (m.track[0] ? m.track : "Phone music") : "No phone music");
-    lv_label_set_text(s_w_music, buf);
+    set_txt(s_w_music, buf);
     char next[24];
     snprintf(buf, sizeof(buf), "%s", alarm_next(next, sizeof(next)) ? next : "No alarms");
-    lv_label_set_text(s_w_alarm, buf);
+    set_txt(s_w_alarm, buf);
     const power_status_t *p = pwr();
     snprintf(buf, sizeof(buf), "%d%%  %.2f V  %s", p->percent, p->voltage_mv / 1000.0,
              p->charging ? "charging" : (p->usb ? "USB" : "on battery"));
-    lv_label_set_text(s_w_bat, buf);
+    set_txt(s_w_bat, buf);
 }
 
 static lv_obj_t *widget(lv_obj_t *c, const char *icon, uint32_t color, const char *title, void (*open)(void))

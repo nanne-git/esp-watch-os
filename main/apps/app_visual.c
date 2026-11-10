@@ -212,6 +212,8 @@ static void view_build(lv_obj_t *c, void *ctx)
 
 static void view_close(void *ctx)
 {
+    /* the screen is still drawn for the 180 ms slide-out: detach the picture before freeing */
+    if (s_view_img) lv_image_set_src(s_view_img, NULL);
     s_view_img = NULL;
     if (s_view_buf) {
         free(s_view_buf);
@@ -267,6 +269,7 @@ void gallery_open_file(const char *abs_path)
 typedef struct {
     char          path[FM_MAX_PATH];
     volatile bool run, paused;
+    volatile bool orphan;      /* page closed while the task was stuck: the task frees v */
     TaskHandle_t  task;
     lv_obj_t     *img, *info, *play;
     lv_image_dsc_t dsc[2];
@@ -371,7 +374,7 @@ static void video_task(void *arg)
     if (f) fclose(f);
     free(buf);
     v->run = false;
-    if (ui_lock()) {
+    if (!v->orphan && ui_lock()) {
         if (v->info) {
             lv_label_set_text(v->info, v->frames ? "Finished" : opened ? "Can't play: no MJPEG frames found"
                                                                        : "Can't open this file");
@@ -379,8 +382,14 @@ static void video_task(void *arg)
         }
         ui_unlock();
     }
-    /* only now: vid_close frees v as soon as task is NULL */
-    v->task = NULL;
+    if (v->orphan) {                   /* the page is gone: clean up ourselves */
+        free(v->frame[0]);
+        free(v->frame[1]);
+        free(v);
+    } else {
+        /* only now: vid_close frees v as soon as task is NULL */
+        v->task = NULL;
+    }
     vTaskDelete(NULL);
 }
 
@@ -389,6 +398,7 @@ static void vid_play(lv_event_t *e)
     video_t *v = s_vid;
     if (!v) return;
     if (!v->run) {
+        if (v->task) return;           /* previous playback is still finishing */
         v->run = true;
         v->paused = false;
         lv_label_set_text(v->info, strrchr(v->path, '/') + 1);
@@ -420,6 +430,7 @@ static void vid_close(void *ctx)
     video_t *v = s_vid;
     ui_keep_awake(false);
     if (!v) return;
+    if (v->img) lv_image_set_src(v->img, NULL);   /* still drawn during the slide-out */
     v->img = NULL;
     v->info = NULL;
     v->run = false;
@@ -429,10 +440,14 @@ static void vid_close(void *ctx)
         vTaskDelay(pdMS_TO_TICKS(20));
         ui_lock();
     }
+    s_vid = NULL;
+    if (v->task) {                     /* stuck (slow SD read): let the task free everything */
+        v->orphan = true;
+        return;
+    }
     free(v->frame[0]);
     free(v->frame[1]);
     free(v);
-    s_vid = NULL;
 }
 
 void video_open_file(const char *abs_path)

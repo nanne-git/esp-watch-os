@@ -670,6 +670,7 @@ static void mkdirs_for(const char *abs_file)
 {
     char tmp[FM_MAX_PATH];
     strlcpy(tmp, abs_file, sizeof(tmp));
+    if (strlen(tmp) <= strlen(MOUNT_POINT) + 1) return;
     for (char *p = tmp + strlen(MOUNT_POINT) + 1; *p; p++) {
         if (*p == '/') {
             *p = '\0';
@@ -682,7 +683,7 @@ static void mkdirs_for(const char *abs_file)
 static void cmd_putb(const char *mode, const char *text)
 {
     if (!s_card) { reply("ERR no SD card"); return; }
-    const char *sp = text ? strchr(text, ' ') : NULL;
+    const char *sp = text ? strrchr(text, ' ') : NULL;      /* base64 has no spaces; paths may */
     if (!mode || !sp || (mode[0] != 'w' && mode[0] != 'a')) { reply("ERR usage: putb <w|a> <path> <base64>"); return; }
     char card[FM_MAX_PATH], abs[FM_MAX_PATH];
     size_t plen = (size_t)(sp - text);
@@ -700,7 +701,7 @@ static void cmd_putb(const char *mode, const char *text)
     FILE *f = fopen(abs, mode[0] == 'w' ? "wb" : "ab");
     if (!f) { reply("ERR cannot open %s", card); return; }
     bool ok = fwrite(bin, 1, n, f) == n;
-    fclose(f);
+    ok = (fclose(f) == 0) && ok;          /* card full shows up at close (flush) */
     reply(ok ? "OK %u" : "ERR write failed", (unsigned)n);
 }
 
@@ -848,6 +849,20 @@ static void run_command(char *line)
     snprintf(text_buf, sizeof(text_buf), "%s", (save && *save) ? save : "");
     char *text = text_buf[0] ? text_buf : NULL;
     char *a2 = strtok_r(NULL, " ", &save);
+
+    /* Bluetooth has no pairing/password: any phone in range could send commands. Over BLE
+     * only read-only commands work; changes need USB (physical) or the password-protected
+     * web/network console (those run in capture mode). */
+    if (!s_capture && !s_reply_to_usb) {
+        static const char *const ble_ok[] = { "help", "ping", "uptime", "status", "info", "df",
+                                              "pwd", "ls", "cd", "cat", "web", NULL };
+        bool ok = false;
+        for (int i = 0; ble_ok[i]; i++) ok |= strcmp(cmd, ble_ok[i]) == 0;
+        if (!ok) {
+            reply("'%s' is not allowed over Bluetooth - use USB or the web console", cmd);
+            return;
+        }
+    }
 
     if (strcmp(cmd, "help") == 0)        { cmd_help(); return; }
     if (strcmp(cmd, "ping") == 0)        { reply("pong"); return; }

@@ -44,19 +44,25 @@ static int track_cmp(const void *a, const void *b)
     return strcasecmp(strrchr(*(char *const *)a, '/'), strrchr(*(char *const *)b, '/'));
 }
 
+/* The scan runs in a background task (ui_run_bg) while music_task may be picking the next
+ * track: build the new list separately and swap it in under the UI lock. */
+static char *s_scan[MAX_TRACKS];
+static int   s_scan_n;
+
 static void scan_dir(const char *dir, int depth)
 {
     DIR *d = opendir(dir);
     if (!d) return;
     struct dirent *e;
     char p[FM_MAX_PATH];
-    while ((e = readdir(d)) != NULL && s_track_n < MAX_TRACKS) {
+    while ((e = readdir(d)) != NULL && s_scan_n < MAX_TRACKS) {
         if (e->d_name[0] == '.') continue;
         snprintf(p, sizeof(p), "%s/%s", dir, e->d_name);
         if (e->d_type == DT_DIR) {
             if (depth < 2 && strcasecmp(e->d_name, "Recordings") != 0) scan_dir(p, depth + 1);
         } else if (is_audio(e->d_name)) {
-            s_tracks[s_track_n++] = strdup(p);
+            char *dup = strdup(p);
+            if (dup) s_scan[s_scan_n++] = dup;
         }
     }
     closedir(d);
@@ -64,10 +70,16 @@ static void scan_dir(const char *dir, int depth)
 
 static void library_scan(void)
 {
-    for (int i = 0; i < s_track_n; i++) free(s_tracks[i]);
-    s_track_n = 0;
+    s_scan_n = 0;
     if (fm_is_mounted()) scan_dir("/sdcard", 0);
-    qsort(s_tracks, s_track_n, sizeof(char *), track_cmp);
+    qsort(s_scan, s_scan_n, sizeof(char *), track_cmp);
+    if (ui_lock()) {                     /* swap: nobody reads a half-built list */
+        for (int i = 0; i < s_track_n; i++) free(s_tracks[i]);
+        memcpy(s_tracks, s_scan, s_scan_n * sizeof(char *));
+        s_track_n = s_scan_n;
+        if (s_track_cur >= s_track_n) s_track_cur = -1;
+        ui_unlock();
+    }
 }
 
 static void play_index(int i)
@@ -105,13 +117,16 @@ static void music_task(void *arg)
            through a library of broken files forever */
         if (esp_timer_get_time() - s_track_start_us < 2000000) s_quick_fails++;
         else s_quick_fails = 0;
+        if (!ui_lock()) continue;          /* the track list may be swapped by a rescan */
         if (s_quick_fails >= 3 || s_quick_fails >= s_track_n) {
             s_quick_fails = 0;
+            ui_unlock();
             ui_toast("Can't play this file");
             ui_on_data_changed();
             continue;
         }
         next_track();
+        ui_unlock();
     }
 }
 

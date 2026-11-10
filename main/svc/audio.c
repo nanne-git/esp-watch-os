@@ -31,7 +31,25 @@ static volatile bool          s_user_stop;
 
 /* ------------------------------------------------------------------ speaker device */
 
+/* the codec device is used by the player task, the beep task and the UI: one lock for it */
+static SemaphoreHandle_t s_dev_lock;
+/* last format the player asked for: lets pl_write() reopen a closed speaker by itself
+ * (esp-audio-player only calls clk_set when the format CHANGES, so after we closed the
+ * speaker at the end of a track the next track of the same format stayed silent) */
+static uint32_t s_want_rate;
+static uint8_t  s_want_bits, s_want_ch;
+
+static bool spk_open_locked(uint32_t rate, uint8_t bits, uint8_t ch);
+
 static bool spk_open(uint32_t rate, uint8_t bits, uint8_t ch)
+{
+    xSemaphoreTakeRecursive(s_dev_lock, portMAX_DELAY);
+    bool ok = spk_open_locked(rate, bits, ch);
+    xSemaphoreGiveRecursive(s_dev_lock);
+    return ok;
+}
+
+static bool spk_open_locked(uint32_t rate, uint8_t bits, uint8_t ch)
 {
     if (!s_spk) {
         return false;
@@ -58,10 +76,12 @@ static bool spk_open(uint32_t rate, uint8_t bits, uint8_t ch)
 
 static void spk_close(void)
 {
+    xSemaphoreTakeRecursive(s_dev_lock, portMAX_DELAY);
     if (s_spk_open) {
-        esp_codec_dev_close(s_spk);
+        esp_codec_dev_close(s_spk);     /* codec + amplifier off: no hiss, no heat */
         s_spk_open = false;
     }
+    xSemaphoreGiveRecursive(s_dev_lock);
 }
 
 void audio_apply_volume(void)
@@ -81,17 +101,25 @@ static void on_settings(void)
 
 static esp_err_t pl_write(void *buf, size_t len, size_t *written, uint32_t timeout_ms)
 {
-    if (s_spk_open && esp_codec_dev_write(s_spk, buf, len) == ESP_CODEC_DEV_OK) {
-        *written = len;
-        return ESP_OK;
+    esp_err_t r = ESP_FAIL;
+    xSemaphoreTakeRecursive(s_dev_lock, portMAX_DELAY);
+    if (!s_spk_open && s_want_rate) {
+        spk_open_locked(s_want_rate, s_want_bits, s_want_ch);   /* new track / resumed after pause */
     }
-    *written = 0;
-    return ESP_FAIL;
+    if (s_spk_open && esp_codec_dev_write(s_spk, buf, len) == ESP_CODEC_DEV_OK) {
+        r = ESP_OK;
+    }
+    xSemaphoreGiveRecursive(s_dev_lock);
+    *written = r == ESP_OK ? len : 0;
+    return r;
 }
 
 static esp_err_t pl_clk(uint32_t rate, uint32_t bits, i2s_slot_mode_t ch)
 {
-    return spk_open(rate, bits, ch == I2S_SLOT_MODE_STEREO ? 2 : 1) ? ESP_OK : ESP_FAIL;
+    s_want_rate = rate;
+    s_want_bits = bits;
+    s_want_ch = ch == I2S_SLOT_MODE_STEREO ? 2 : 1;
+    return spk_open(rate, bits, s_want_ch) ? ESP_OK : ESP_FAIL;
 }
 
 static esp_err_t pl_mute(AUDIO_PLAYER_MUTE_SETTING setting)
@@ -110,17 +138,20 @@ static void pl_event(audio_player_cb_ctx_t *ctx)
         break;
     case AUDIO_PLAYER_CALLBACK_EVENT_PAUSE:
         s_pstate = PLAYER_PAUSED;
+        spk_close();                  /* paused: amplifier off; pl_write reopens on resume */
         break;
-    case AUDIO_PLAYER_CALLBACK_EVENT_IDLE:
-        if (s_pstate != PLAYER_IDLE) {
-            s_pstate = PLAYER_IDLE;
-            spk_close();
-            if (!s_user_stop && s_done_cb) {
-                s_done_cb();          /* finished on its own: let the app play the next track */
-            }
-            s_user_stop = false;
+    case AUDIO_PLAYER_CALLBACK_EVENT_IDLE: {
+        /* always power the speaker down - player_stop() already set the state to IDLE, so
+         * checking the state here used to skip this and left the amplifier on */
+        bool finished_by_itself = s_pstate != PLAYER_IDLE && !s_user_stop;
+        s_pstate = PLAYER_IDLE;
+        spk_close();
+        if (finished_by_itself && s_done_cb) {
+            s_done_cb();              /* let the app play the next track */
         }
+        s_user_stop = false;
         break;
+    }
     case AUDIO_PLAYER_CALLBACK_EVENT_UNKNOWN_FILE_TYPE:
         ESP_LOGW(TAG, "unsupported file: %s", s_current);
         s_pstate = PLAYER_IDLE;
@@ -201,6 +232,19 @@ static FILE *open_audio(const char *path)
     FILE *f = fopen(path, "rb");
     if (!f) return NULL;
     long base = id3_size(f);
+    if (base) {
+        /* some files have padding after the tag: start exactly at the first frame sync, as
+         * the player's is_mp3() only recognises FF Fx at position 0 */
+        unsigned char b[512];
+        fseek(f, base, SEEK_SET);
+        size_t n = fread(b, 1, sizeof(b), f);
+        for (size_t i = 0; i + 1 < n; i++) {
+            if (b[i] == 0xFF && (b[i + 1] & 0xE0) == 0xE0) {
+                base += i;
+                break;
+            }
+        }
+    }
     fseek(f, base, SEEK_SET);
     if (base == 0) return f;
     ESP_LOGI(TAG, "skipping %ld bytes of ID3 tags", base);
@@ -244,7 +288,8 @@ bool player_play(const char *path)
     s_play_start_us = esp_timer_get_time();
     s_play_paused_acc_us = 0;
     s_pstate = PLAYER_PLAYING;
-    if (audio_player_play(f) != ESP_OK) {         /* the player closes the file */
+    if (audio_player_play(f) != ESP_OK) {         /* on success the player closes the file */
+        fclose(f);                                 /* ...but not when it refused it */
         s_pstate = PLAYER_IDLE;
         return false;
     }
@@ -303,10 +348,15 @@ static void beep_task(void *arg)
     int16_t *buf = malloc(256 * sizeof(int16_t));
     while (true) {
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        if (s_pstate == PLAYER_PAUSED) {
+            player_stop();          /* a forgotten paused song must not silence the alarm */
+            vTaskDelay(pdMS_TO_TICKS(100));
+        }
         if (!buf || s_pstate != PLAYER_IDLE || rec_active()) {
             continue;
         }
         xSemaphoreTake(s_lock, portMAX_DELAY);
+        xSemaphoreTakeRecursive(s_dev_lock, portMAX_DELAY);
         if (spk_open(rate, 16, 1)) {
             s_beep_stop = false;
             int total = rate * s_beep_ms / 1000;
@@ -325,6 +375,7 @@ static void beep_task(void *arg)
             esp_codec_dev_write(s_spk, buf, 256 * sizeof(int16_t));
             spk_close();                 /* power the codec + amplifier down again */
         }
+        xSemaphoreGiveRecursive(s_dev_lock);
         xSemaphoreGive(s_lock);
     }
 }
@@ -463,7 +514,11 @@ int rec_level(void) { return s_rec_level; }
 
 void audio_init(void)
 {
-    s_lock = xSemaphoreCreateMutex();
+    /* binary semaphore, not a mutex: rec_start() takes it in the UI task and rec_task gives
+     * it back - giving a mutex from another task trips a FreeRTOS assert (crash) */
+    s_lock = xSemaphoreCreateBinary();
+    xSemaphoreGive(s_lock);
+    s_dev_lock = xSemaphoreCreateRecursiveMutex();
     s_spk = bsp_audio_codec_speaker_init();
     s_mic = bsp_audio_codec_microphone_init();
     ESP_LOGI(TAG, "speaker %s, microphone %s", s_spk ? "ok" : "missing", s_mic ? "ok" : "missing");

@@ -20,6 +20,7 @@ typedef struct {
 
 /* notifications (newest first) */
 int  notif_count(void);
+uint32_t notif_generation(void);     /* changes whenever the list changes */
 bool notif_get(int index, notif_t *out);
 void notif_add(const notif_t *n);           /* also triggers toast + vibration (respects DND) */
 void notif_remove_id(uint32_t id);

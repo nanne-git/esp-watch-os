@@ -64,6 +64,10 @@ static void unlock(void) { xSemaphoreGive(s_lock); }
 
 int notif_count(void) { return s_notif_count; }
 
+/* bumps on every change, so lists can tell "same count, different content" apart */
+static volatile uint32_t s_notif_gen;
+uint32_t notif_generation(void) { return s_notif_gen; }
+
 bool notif_get(int i, notif_t *out)
 {
     lock();
@@ -96,6 +100,7 @@ bool notif_dnd_active(void)
 
 void notif_add(const notif_t *n)
 {
+    s_notif_gen++;
     if (!settings()->notif_on) {
         return;
     }
@@ -129,6 +134,7 @@ void notif_add(const notif_t *n)
 
 void notif_remove_id(uint32_t id)
 {
+    s_notif_gen++;
     lock();
     for (int i = 0; i < s_notif_count; i++) {
         if (s_notifs[i].id == id) {
@@ -143,6 +149,7 @@ void notif_remove_id(uint32_t id)
 
 void notif_clear(void)
 {
+    s_notif_gen++;
     lock();
     s_notif_count = 0;
     unlock();
@@ -323,14 +330,14 @@ static void handle_gb(cJSON *o)
     const char *t = jstr(o, "t");
     if (strcmp(t, "notify") == 0) {
         notif_t n = { 0 };
-        n.id = (uint32_t)jnum(o, "id", esp_random());
+        n.id = (uint32_t)(int64_t)jnum(o, "id", esp_random());   /* ids can be negative */
         strlcpy(n.app, *jstr(o, "src") ? jstr(o, "src") : "Phone", sizeof(n.app));
         const char *title = *jstr(o, "title") ? jstr(o, "title") : jstr(o, "sender");
         strlcpy(n.title, title, sizeof(n.title));
         strlcpy(n.body, *jstr(o, "body") ? jstr(o, "body") : jstr(o, "subject"), sizeof(n.body));
         notif_add(&n);
     } else if (strcmp(t, "notify-") == 0) {
-        notif_remove_id((uint32_t)jnum(o, "id", 0));
+        notif_remove_id((uint32_t)(int64_t)jnum(o, "id", 0));
     } else if (strcmp(t, "call") == 0) {
         const char *cmd = jstr(o, "cmd");
         if (strcmp(cmd, "incoming") == 0) {

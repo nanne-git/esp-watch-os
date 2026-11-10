@@ -187,7 +187,9 @@ const enc = encodeURIComponent;
 let tab = 'dash';
 function toast(m, err) { const t = $('toast'); t.textContent = m; t.className = 'show' + (err ? ' err' : ''); clearTimeout(t._h); t._h = setTimeout(() => t.className = '', err ? 5000 : 2500); }
 async function api(method, url, body) {
-  const r = await fetch(url, { method, body, headers: body && typeof body === 'string' ? { 'Content-Type': 'application/json' } : {} });
+  const headers = { 'X-Watch': '1' };
+  if (body && typeof body === 'string') headers['Content-Type'] = 'application/json';
+  const r = await fetch(url, { method, body, headers });
   let j = {}; try { j = await r.clone().json(); } catch (_) {}
   if (!r.ok || j.ok === false) throw new Error(j.error || r.statusText);
   return j;
@@ -232,25 +234,27 @@ async function refreshStatus() {
 async function reboot() { if (confirm('Restart the watch?')) { await post('/api/reboot').catch(() => {}); toast('Restarting…'); } }
 
 /* ---------- screen ---------- */
-let shotTimer;
+let shotTimer, lastInput = 0;
+document.addEventListener('visibilitychange', () => { if (!document.hidden && tab === 'screen') shot(); });
 function shot() {
   clearTimeout(shotTimer);
   if (tab !== 'screen') return;
   const img = $('scr');
-  img.onload = img.onerror = () => { shotTimer = setTimeout(shot, 1000); };
+  /* each frame is ~400 KB over Wi-Fi: only while the tab is visible, slower when idle */
+  img.onload = img.onerror = () => { shotTimer = setTimeout(shot, document.hidden ? 5000 : (Date.now() - lastInput < 10000 ? 1000 : 3000)); };
   img.src = '/api/screenshot.bmp?t=' + Date.now();
 }
 function toWatch(e) { const r = $('scr').getBoundingClientRect(); return [Math.round((e.clientX - r.left) * 410 / r.width), Math.round((e.clientY - r.top) * 502 / r.height)]; }
 let down = null;
-$('scr').onpointerdown = e => { down = toWatch(e); };
+$('scr').onpointerdown = e => { down = toWatch(e); lastInput = Date.now(); };
 $('scr').onpointerup = e => {
   if (!down) return; const up = toWatch(e); const dx = up[0] - down[0], dy = up[1] - down[1];
   if (Math.hypot(dx, dy) < 15) post(`/api/input?type=tap&x=${down[0]}&y=${down[1]}`);
   else swipe(down[0], down[1], up[0], up[1]);
   down = null; setTimeout(shot, 400);
 };
-function key(k) { post('/api/input?type=key&k=' + k).then(() => setTimeout(shot, 300)); }
-function swipe(a, b, c, d) { post(`/api/input?type=swipe&x1=${a}&y1=${b}&x2=${c}&y2=${d}`).then(() => setTimeout(shot, 500)); }
+function key(k) { lastInput = Date.now(); post('/api/input?type=key&k=' + k).then(() => setTimeout(shot, 300)); }
+function swipe(a, b, c, d) { lastInput = Date.now(); post(`/api/input?type=swipe&x1=${a}&y1=${b}&x2=${c}&y2=${d}`).then(() => setTimeout(shot, 500)); }
 function saveShot() { const a = document.createElement('a'); a.href = '/api/screenshot.bmp?t=' + Date.now(); a.download = 'watch-' + Date.now() + '.bmp'; a.click(); }
 
 /* ---------- files ---------- */
@@ -300,7 +304,7 @@ async function mkdirDlg() { const n = prompt('Folder name'); if (!n) return; try
 async function delSel() { const ns = [...sel]; if (!confirm(`Delete ${ns.length} item(s)? Folders are deleted with everything inside. This cannot be undone.`)) return;
   try { for (const n of ns) await post('/api/delete?path=' + enc(join(cwd, n))); toast('Deleted'); loadFiles(cwd); } catch (e) { toast(e.message, true); } }
 function up1(file, over) { return new Promise((res, rej) => { const x = new XMLHttpRequest();
-  x.open('POST', '/api/upload?path=' + enc(join(cwd, file.name)) + (over ? '&overwrite=1' : ''));
+  x.open('POST', '/api/upload?path=' + enc(join(cwd, file.name)) + (over ? '&overwrite=1' : '')); x.setRequestHeader('X-Watch', '1');
   x.upload.onprogress = e => { if (e.lengthComputable) $('progb').style.width = (e.loaded / e.total * 100) + '%'; };
   x.onload = () => x.status < 300 ? res() : rej(Object.assign(new Error(file.name + ': ' + x.statusText), { status: x.status }));
   x.onerror = () => rej(new Error(file.name + ': network error')); x.send(file); }); }
@@ -379,7 +383,7 @@ async function pollOta() {
 }
 function uploadFw() { const f = $('ofile').files[0]; if (!f) return toast('Choose a .bin file', true);
   if (!confirm(`Install ${f.name}? The watch restarts.`)) return;
-  const x = new XMLHttpRequest(); x.open('POST', '/api/ota/upload');
+  const x = new XMLHttpRequest(); x.open('POST', '/api/ota/upload'); x.setRequestHeader('X-Watch', '1');
   x.upload.onprogress = e => { if (e.lengthComputable) { $('obar').style.width = (e.loaded / e.total * 100) + '%'; $('ostat').textContent = `Uploading… ${Math.round(e.loaded / e.total * 100)}%`; } };
   x.onload = () => { if (x.status < 300) { toast('Installed - restarting'); $('ostat').textContent = 'Restarting…'; setTimeout(pollOta, 8000); } else toast('Upload failed: ' + x.responseText, true); };
   x.send(f); }
@@ -417,7 +421,7 @@ async function pollLog() {
 function devLoop() { clearTimeout(devTimer); if (tab !== 'dev') return; pollLog(); loadTasks(); devTimer = setTimeout(devLoop, 2000); }
 function openDev() { loadDev(); devLoop(); }
 async function runCmd() { const c = $('cin').value.trim(); if (!c) return;
-  try { const r = await fetch('/api/console', { method: 'POST', body: c }); $('cout').textContent = '> ' + c + '\n' + await r.text() + '\n' + $('cout').textContent; $('cin').value = ''; }
+  try { const r = await fetch('/api/console', { method: 'POST', body: c, headers: { 'X-Watch': '1' } }); $('cout').textContent = '> ' + c + '\n' + await r.text() + '\n' + $('cout').textContent; $('cin').value = ''; }
   catch (e) { toast(e.message, true); } }
 function dlLog() { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([$('logbox').textContent], { type: 'text/plain' })); a.download = 'watch-log.txt'; a.click(); }
 

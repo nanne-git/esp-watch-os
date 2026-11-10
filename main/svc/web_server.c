@@ -202,7 +202,7 @@ static void notify_transfer(void)
  * which is why typing the address into Chrome often never reached the watch. */
 static esp_err_t portal_redirect(httpd_req_t *req)
 {
-    ESP_LOGI(TAG, "portal: %s -> dashboard", req->uri);
+    ESP_LOGD(TAG, "portal: %s -> dashboard", req->uri);
     httpd_resp_set_status(req, "302 Found");
     httpd_resp_set_hdr(req, "Location", "http://192.168.4.1/");
     httpd_resp_set_hdr(req, "Cache-Control", "no-cache");
@@ -311,6 +311,17 @@ static esp_err_t api_file(httpd_req_t *req)
         return send_error(req, "500 Internal Server Error", "out of memory");
     }
     httpd_resp_set_type(req, mime_type(path));
+    /* files from the card must never run as part of the dashboard (an .html/.svg file with a
+     * script could otherwise use your login): sandbox them, and download web pages instead */
+    httpd_resp_set_hdr(req, "Content-Security-Policy", "sandbox");
+    httpd_resp_set_hdr(req, "X-Content-Type-Options", "nosniff");
+    {
+        const char *dot = strrchr(path, '.');
+        if (dot && (!strcasecmp(dot, ".html") || !strcasecmp(dot, ".htm") || !strcasecmp(dot, ".svg") ||
+                    !strcasecmp(dot, ".xhtml") || !strcasecmp(dot, ".xml"))) {
+            httpd_resp_set_hdr(req, "Content-Disposition", "attachment");
+        }
+    }
 
     /* Chunked replies mix tiny writes (chunk headers) with big ones. Without TCP_NODELAY,
      * Nagle's algorithm waits for the browser's (delayed) ACK after every chunk. */
@@ -355,7 +366,11 @@ static esp_err_t api_upload(httpd_req_t *req)
         return send_error(req, "409 Conflict", "already exists");
     }
 
-    FILE *f = fopen(path, "wb");
+    /* write to "<name>.part" and only replace the real file when everything arrived, so a
+     * dropped connection never destroys the existing file (e.g. saving main.lua) */
+    char part[FM_MAX_PATH + 8];
+    snprintf(part, sizeof(part), "%s.part", path);
+    FILE *f = fopen(part, "wb");
     if (!f) {
         return send_errno(req);
     }
@@ -397,8 +412,13 @@ static esp_err_t api_upload(httpd_req_t *req)
         why = "write failed - card full?";
     }
     if (!ok) {
-        unlink(path);                        /* don't keep half-uploaded files */
+        unlink(part);                        /* the original file is untouched */
         return send_error(req, "500 Internal Server Error", why);
+    }
+    unlink(path);                            /* FAT can't rename over an existing file */
+    if (rename(part, path) != 0) {
+        unlink(part);
+        return send_errno(req);
     }
     return send_ok(req);
 }
@@ -498,10 +518,11 @@ static char *read_body(httpd_req_t *req, size_t max)
     }
     char *b = malloc(req->content_len + 1);
     size_t got = 0;
+    int timeouts = 0;
     while (b && got < req->content_len) {
         int r = httpd_req_recv(req, b + got, req->content_len - got);
         if (r <= 0) {
-            if (r == HTTPD_SOCK_ERR_TIMEOUT) continue;
+            if (r == HTTPD_SOCK_ERR_TIMEOUT && ++timeouts < 5) continue;   /* never wait forever */
             free(b);
             return NULL;
         }
@@ -882,8 +903,41 @@ static bool auth_ok(httpd_req_t *req)
     return colon && strcmp(colon + 1, pass) == 0;
 }
 
+/* Only answer requests addressed to the watch itself (blocks DNS-rebinding attacks where a
+ * website makes your browser talk to the watch under the website's own name). */
+static bool host_ok(httpd_req_t *req)
+{
+    char host[72];
+    if (httpd_req_get_hdr_value_str(req, "Host", host, sizeof(host)) != ESP_OK) return false;
+    char *colon = strchr(host, ':');
+    if (colon) *colon = '\0';
+    const char *url = wifi_get_url();                     /* "http://<ip>/" when on Wi-Fi */
+    char ip[24] = "";
+    if (strncmp(url, "http://", 7) == 0) {
+        strlcpy(ip, url + 7, sizeof(ip));
+        char *sl = strchr(ip, '/');
+        if (sl) *sl = '\0';
+    }
+    const char *hn = settings()->hostname;
+    char hn_local[48];
+    snprintf(hn_local, sizeof(hn_local), "%s.local", hn);
+    return strcmp(host, "192.168.4.1") == 0 || (ip[0] && strcmp(host, ip) == 0) ||
+           strcasecmp(host, hn) == 0 || strcasecmp(host, hn_local) == 0;
+}
+
 static esp_err_t guarded(httpd_req_t *req)
 {
+    if (!host_ok(req)) {
+        return send_error(req, "403 Forbidden", "wrong host name");
+    }
+    /* Changes need a custom header: a plain cross-site form/fetch can't add one without the
+     * browser asking the watch first (CSRF protection). The dashboard and watchctl send it. */
+    if (req->method == HTTP_POST) {
+        char x[4];
+        if (httpd_req_get_hdr_value_str(req, "X-Watch", x, sizeof(x)) != ESP_OK) {
+            return send_error(req, "403 Forbidden", "missing X-Watch header");
+        }
+    }
     ESP_LOGD(TAG, "%s %s", req->method == HTTP_POST ? "POST" : "GET", req->uri);
     if (!settings()->web_on) {
         return send_error(req, "403 Forbidden", "web manager is turned off on the watch");

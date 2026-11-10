@@ -44,7 +44,7 @@ static const char *TAG = "luaapp";
 #define TIME_LIMIT_MS   1500         /* one callback may run at most this long */
 #define MAX_TIMERS      16
 #define HTTP_MAX_BODY   (32 * 1024)
-#define HTTP_MAX_JOBS   3
+#define HTTP_MAX_JOBS   1          /* each request needs an 8 KB internal-RAM task stack */
 #define CONTENT_H       (UI_H - 64)
 
 typedef enum { K_LABEL, K_BUTTON, K_BOX, K_SLIDER, K_SWITCH, K_BAR, K_ARC, K_IMAGE, K_ROW } kind_t;
@@ -69,6 +69,8 @@ static struct {
     lua_State *L;
     uint32_t   gen;             /* bumps every time a Lua state is closed */
     bool       dead;            /* failed: no more Lua calls, error is being shown */
+    bool       closing;         /* running on_close: no new dialogs/pages */
+    bool       timed_out;       /* time limit hit: keep raising until we're back in C */
     bool       page_open;
     int        page_depth;      /* ui_page_depth() of our page */
     lv_obj_t  *root;
@@ -293,7 +295,13 @@ static void *l_alloc(void *ud, void *ptr, size_t osize, size_t nsize)
 
 static void l_hook(lua_State *L, lua_Debug *ar)
 {
-    if (esp_timer_get_time() > s_app.deadline) {
+    if (s_app.timed_out || esp_timer_get_time() > s_app.deadline) {
+        /* sticky: once over time, raise on EVERY instruction, so a pcall() around an endless
+         * loop can't catch the error and keep looping - it unwinds all the way out */
+        if (!s_app.timed_out) {
+            s_app.timed_out = true;
+            lua_sethook(L, l_hook, LUA_MASKCOUNT, 1);
+        }
         luaL_error(L, "app is not responding (a callback ran longer than %d ms - endless loop?)", TIME_LIMIT_MS);
     }
 }
@@ -705,6 +713,7 @@ static int m_clear(lua_State *L)
 {
     lobj_t *lo = check_obj(L, 1);
     lv_obj_clean(lo->obj);
+    if (lo->label && lo->label != lo->obj) lo->label = NULL;   /* a button's label was a child */
     lua_settop(L, 1);
     return 1;
 }
@@ -956,6 +965,7 @@ static void kb_done(const char *text, void *user)
 
 static int ui_l_keyboard(lua_State *L)
 {
+    if (s_app.closing) return luaL_error(L, "not allowed in on_close");
     const char *title = luaL_checkstring(L, 1);
     const char *init = luaL_optstring(L, 2, "");
     pending_t *p = pending_new(L, 3);
@@ -970,6 +980,7 @@ static void confirm_yes(void *user)
 
 static int ui_l_confirm(lua_State *L)
 {
+    if (s_app.closing) return luaL_error(L, "not allowed in on_close");
     const char *title = luaL_checkstring(L, 1);
     const char *msg = luaL_checkstring(L, 2);
     pending_t *p = pending_new(L, 3);
@@ -987,6 +998,7 @@ static void choose_done(int index, void *user)
 
 static int ui_l_choose(lua_State *L)
 {
+    if (s_app.closing) return luaL_error(L, "not allowed in on_close");
     const char *title = luaL_checkstring(L, 1);
     luaL_checktype(L, 2, LUA_TTABLE);
     int n = (int)luaL_len(L, 2);
@@ -1095,9 +1107,12 @@ static void set_num(lua_State *L, const char *k, lua_Number v) { lua_pushnumber(
 static void set_bool(lua_State *L, const char *k, bool v) { lua_pushboolean(L, v); lua_setfield(L, -2, k); }
 static void set_str(lua_State *L, const char *k, const char *v) { lua_pushstring(L, v); lua_setfield(L, -2, k); }
 
-static int w_time(lua_State *L)
+static int push_time(lua_State *L, time_t now);
+
+static int w_time(lua_State *L) { return push_time(L, time(NULL)); }
+
+static int push_time(lua_State *L, time_t now)
 {
-    time_t now = time(NULL);
     struct tm lt;
     localtime_r(&now, &lt);
     lua_createtable(L, 0, 9);
@@ -1247,27 +1262,57 @@ static void json_to_lua(lua_State *L, const cJSON *j, int depth)
     }
 }
 
+/* Building/converting can raise a Lua error half-way (memory limit, bad table); doing it in
+ * a protected call lets us always free the cJSON tree (it lives outside Lua's memory). */
+static cJSON *s_json_tmp;
+
+static int json_encode_p(lua_State *L)
+{
+    s_json_tmp = cJSON_CreateArray();            /* holder: freed as one tree on error */
+    cJSON_AddItemToArray(s_json_tmp, lua_to_json(L, 1, 0));
+    return 0;
+}
+
 static int json_encode(lua_State *L)
 {
-    cJSON *j = lua_to_json(L, 1, 0);
-    char *s = cJSON_PrintUnformatted(j);
-    cJSON_Delete(j);
+    luaL_checkany(L, 1);
+    lua_settop(L, 1);
+    lua_pushcfunction(L, json_encode_p);
+    lua_insert(L, 1);
+    int r = lua_pcall(L, 1, 0, 0);
+    cJSON *holder = s_json_tmp;
+    s_json_tmp = NULL;
+    char *s = (r == LUA_OK && holder) ? cJSON_PrintUnformatted(cJSON_GetArrayItem(holder, 0)) : NULL;
+    cJSON_Delete(holder);
+    if (r != LUA_OK) return lua_error(L);
     if (!s) return luaL_error(L, "json: out of memory");
     lua_pushstring(L, s);
     free(s);
     return 1;
 }
 
+static int json_decode_p(lua_State *L)
+{
+    json_to_lua(L, (cJSON *)lua_touserdata(L, 1), 0);
+    return 1;
+}
+
 static int json_decode(lua_State *L)
 {
-    cJSON *j = cJSON_Parse(luaL_checkstring(L, 1));
+    size_t len;
+    const char *txt = luaL_checklstring(L, 1, &len);
+    if (len > 64 * 1024) return luaL_error(L, "json.decode: text too long (max 64 KB)");
+    cJSON *j = cJSON_Parse(txt);
     if (!j) {
         lua_pushnil(L);
         lua_pushstring(L, "invalid JSON");
         return 2;
     }
-    json_to_lua(L, j, 0);
+    lua_pushcfunction(L, json_decode_p);
+    lua_pushlightuserdata(L, j);
+    int r = lua_pcall(L, 1, 1, 0);
     cJSON_Delete(j);
+    if (r != LUA_OK) return lua_error(L);
     return 1;
 }
 
@@ -1334,14 +1379,24 @@ static int st_read(lua_State *L)
 {
     char path[128];
     file_path(L, 1, path, sizeof(path));
-    size_t n;
-    char *txt = read_file(path, 256 * 1024, &n);
-    if (!txt) {
+    FILE *f = fopen(path, "rb");
+    if (!f) {
         lua_pushnil(L);
         return 1;
     }
-    lua_pushlstring(L, txt, n);
-    free(txt);
+    /* read into Lua-owned memory: counted against the app's limit and freed if Lua errors
+     * (a malloc'd buffer leaked whenever lua_pushlstring raised "not enough memory") */
+    luaL_Buffer b;
+    luaL_buffinit(L, &b);
+    size_t total = 0, n;
+    do {
+        char *p = luaL_prepbuffsize(&b, 4096);
+        n = fread(p, 1, 4096, f);
+        luaL_addsize(&b, n);
+        total += n;
+    } while (n == 4096 && total < 256 * 1024);
+    fclose(f);
+    luaL_pushresult(&b);
     return 1;
 }
 
@@ -1385,6 +1440,7 @@ typedef struct {
     char    *resp;
     size_t   len;
     bool     truncated;
+    int      status;
 } http_job_t;
 
 static esp_err_t http_evt(esp_http_client_event_t *e)
@@ -1398,6 +1454,31 @@ static esp_err_t http_evt(esp_http_client_event_t *e)
         j->len += n;
     }
     return ESP_OK;
+}
+
+static void http_job_free(http_job_t *j)
+{
+    free(j->resp);
+    free(j->url);
+    free(j->body);
+    free(j->ctype);
+    free(j);
+    s_http_jobs--;
+}
+
+static void http_deliver(void *arg)
+{
+    http_job_t *j = arg;
+    if (j->gen == s_app.gen && can_call()) {      /* app still the same one: call it */
+        lua_State *L = s_app.L;
+        lua_rawgeti(L, LUA_REGISTRYINDEX, j->ref);
+        luaL_unref(L, LUA_REGISTRYINDEX, j->ref);
+        lua_pushinteger(L, j->status);
+        if (j->resp && j->status > 0) lua_pushlstring(L, j->resp, j->len);
+        else lua_pushnil(L);
+        app_pcall(2);
+    }
+    http_job_free(j);
 }
 
 static void http_task(void *arg)
@@ -1425,24 +1506,14 @@ static void http_task(void *arg)
     if (c) esp_http_client_cleanup(c);
     if (j->resp) j->resp[j->len] = '\0';
 
+    j->status = status;
+    /* run the Lua callback on the LVGL task (12 KB stack), not on this small network task */
     if (ui_lock()) {
-        if (j->gen == s_app.gen && can_call()) {
-            lua_State *L = s_app.L;
-            lua_rawgeti(L, LUA_REGISTRYINDEX, j->ref);
-            luaL_unref(L, LUA_REGISTRYINDEX, j->ref);
-            lua_pushinteger(L, status);
-            if (j->resp && status > 0) lua_pushlstring(L, j->resp, j->len);
-            else lua_pushnil(L);
-            app_pcall(2);
-        }
+        lv_async_call(http_deliver, j);
         ui_unlock();
+    } else {
+        http_job_free(j);
     }
-    free(j->resp);
-    free(j->url);
-    free(j->body);
-    free(j->ctype);
-    free(j);
-    s_http_jobs--;
     vTaskDelete(NULL);
 }
 
@@ -1496,6 +1567,7 @@ static void exit_async(void *arg)
 
 static int a_exit(lua_State *L)
 {
+    if (s_app.closing) return luaL_error(L, "not allowed in on_close");
     lv_async_call(exit_async, (void *)(uintptr_t)s_app.gen);
     return 0;
 }
@@ -1553,11 +1625,7 @@ static int os_date(lua_State *L)
     time_t t = (time_t)luaL_optinteger(L, 2, (lua_Integer)time(NULL));
     struct tm tm;
     localtime_r(&t, &tm);
-    if (strncmp(fmt, "*t", 2) == 0) {
-        lua_pushinteger(L, (lua_Integer)t);
-        lua_replace(L, 1);
-        return w_time(L);
-    }
+    if (strncmp(fmt, "*t", 2) == 0) return push_time(L, t);
     char buf[128];
     size_t n = strftime(buf, sizeof(buf), fmt, &tm);
     lua_pushlstring(L, buf, n);
@@ -1573,6 +1641,8 @@ static const luaL_Reg OS_FUNCS[] = { { "time", os_time }, { "clock", os_clock },
 static void app_start(void)
 {
     s_app.dead = false;
+    s_app.timed_out = false;
+    s_app.closing = false;
     s_app.mem_used = 0;
     s_app.mem_limit = (size_t)s_app.info.memory_kb * 1024;
     lv_obj_clean(s_app.root);
@@ -1652,10 +1722,14 @@ static void app_stop_state(void)
 {
     lua_State *L = s_app.L;
     if (!L) return;
-    if (!s_app.dead && lua_getglobal(L, "on_close") == LUA_TFUNCTION) {
-        app_pcall(0);
-    } else {
-        lua_pop(L, 1);
+    if (!s_app.dead) {
+        s_app.closing = true;            /* on_close may not open dialogs / exit (page stack) */
+        if (lua_getglobal(L, "on_close") == LUA_TFUNCTION) {
+            app_pcall(0);
+        } else {
+            lua_pop(L, 1);               /* only pop what lua_getglobal pushed (else: abort()) */
+        }
+        s_app.closing = false;
     }
     for (int i = 0; i < MAX_TIMERS; i++) {
         if (s_app.timers[i].t) lv_timer_delete(s_app.timers[i].t);
