@@ -31,12 +31,15 @@ import time
 import urllib.parse
 import urllib.request
 
-import serial
 
 PORT = os.environ.get("WATCH_PORT", "/dev/cu.usbmodem1101")
 
 
 def open_port():
+    try:
+        import serial
+    except ImportError:
+        sys.exit("needs pyserial: pip3 install pyserial  (or use WATCH_HOST=<ip> for Wi-Fi)")
     s = serial.Serial()
     s.port = PORT
     s.baudrate = 115200
@@ -179,7 +182,10 @@ def push_usb(app_id, files):
     for rel, full in files:
         data = open(full, "rb").read()
         path = f"/apps/{app_id}/{rel}"
-        chunk = 140
+        room = 240 - len(f"putb w {path} ")          # the watch reads lines of max 244 chars
+        if room < 8:
+            sys.exit(f"path too long for USB transfer: {path}")
+        chunk = room // 4 * 3                        # base64 makes 3 bytes into 4 chars
         parts = [data[i:i + chunk] for i in range(0, len(data), chunk)] or [b""]
         for i, part in enumerate(parts):
             send(f"putb {'w' if i == 0 else 'a'} {path} {base64.b64encode(part).decode()}")
