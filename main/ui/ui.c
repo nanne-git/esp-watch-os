@@ -633,6 +633,9 @@ void ui_inject_key(const char *key)
         ui_page_pop();
     } else if (strcmp(key, "home") == 0) {
         ui_go_home();
+    } else if (strcmp(key, "recents") == 0) {
+        ui_go_home();
+        ui_open_recents();
     }
     ui_unlock();
 }
@@ -731,7 +734,11 @@ static void on_button(button_id_t id, button_event_t ev)
                 ui_open_launcher();
             }
         } else if (id == BTN_BOOT && ev == BTN_LONG) {
-            ui_go_home();
+            if (s_depth > 0) {
+                ui_go_home();
+            } else {
+                ui_open_recents();          /* on the watch face: recent apps */
+            }
         }
     }
     ui_unlock();

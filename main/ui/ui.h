@@ -114,3 +114,8 @@ void ui_open_notifications(void);
 void ui_open_widgets(void);
 void ui_open_face_picker(void);
 void ui_open_power_menu(void);
+
+/* recent apps (ui_recents.c) */
+void ui_open_recents(void);
+void ui_recents_note(const char *name, const char *icon, bool icon_img, uint32_t color,
+                     void (*open)(void), const char *lua_id);

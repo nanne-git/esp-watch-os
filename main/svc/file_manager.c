@@ -715,7 +715,7 @@ static void cmd_tasks(void)
     if (!ts) return;
     n = uxTaskGetSystemState(ts, n + 4, NULL);
     for (UBaseType_t i = 0; i < n; i++) {
-        bool ext = esp_ptr_external_ram(pxTaskGetStackStart(ts[i].xHandle));
+        bool ext = esp_ptr_external_ram(xTaskGetStackStart(ts[i].xHandle));
         reply("%-16s free %5u  %s", ts[i].pcTaskName, (unsigned)ts[i].usStackHighWaterMark, ext ? "psram" : "INTERNAL");
     }
     free(ts);

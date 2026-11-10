@@ -377,6 +377,7 @@ void ui_home_refresh(void)
 static void app_tile_cb(lv_event_t *e)
 {
     const app_def_t *a = lv_event_get_user_data(e);
+    ui_recents_note(a->name, a->icon, false, a->color, a->open, NULL);
     a->open();
 }
 
@@ -387,7 +388,10 @@ static int             s_lua_count;
 static void lua_tile_cb(lv_event_t *e)
 {
     int i = (int)(intptr_t)lv_event_get_user_data(e);
-    if (i < s_lua_count) lua_app_open(s_lua_apps[i].id);
+    if (i >= s_lua_count) return;
+    lua_app_info_t *a = &s_lua_apps[i];
+    ui_recents_note(a->name, a->icon, a->icon_is_image, a->color, NULL, a->id);
+    lua_app_open(a->id);
 }
 
 static void lua_uninstall_yes(void *user)
@@ -447,12 +451,17 @@ static lv_obj_t *app_tile(lv_obj_t *c, const char *name, const char *icon, bool 
     return t;
 }
 
+static void recents_btn_cb(lv_event_t *e) { ui_open_recents(); }
+
 static void launcher_build(lv_obj_t *c, void *ctx)
 {
     lv_obj_set_flex_flow(c, LV_FLEX_FLOW_ROW_WRAP);
     lv_obj_set_flex_align(c, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
     lv_obj_set_style_pad_row(c, 14, 0);
     lv_obj_set_style_pad_hor(c, 6, 0);
+    /* "Recent" shortcut on top of the grid */
+    lv_obj_t *rb = ui_button(c, LV_SYMBOL_LIST "  Recent apps", UI_CARD2, recents_btn_cb, NULL);
+    lv_obj_set_width(rb, lv_pct(94));
     for (int i = 0; i < g_app_count; i++) {
         const app_def_t *a = &g_apps[i];
         app_tile(c, a->name, a->icon, false, a->color, app_tile_cb, (void *)a);
