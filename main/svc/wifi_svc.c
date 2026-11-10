@@ -148,6 +148,9 @@ static void on_event(void *arg, esp_event_base_t base, int32_t id, void *data)
         s_url[0] = '\0';
         xEventGroupSetBits(s_ev, EV_DISCONN);
         ui_on_data_changed();
+    } else if (base == IP_EVENT && id == IP_EVENT_ASSIGNED_IP_TO_CLIENT) {
+        ip_event_assigned_ip_to_client_t *e = data;
+        ESP_LOGI(TAG, "hotspot gave " IPSTR " to a device", IP2STR(&e->ip));
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *e = data;
         s_state = WIFI_ST_CONNECTED;
@@ -521,6 +524,7 @@ void wifi_svc_start(void)
     esp_wifi_set_storage(WIFI_STORAGE_RAM);       /* we keep our own saved-network list */
     esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, on_event, NULL);
     esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, on_event, NULL);
+    esp_event_handler_register(IP_EVENT, IP_EVENT_ASSIGNED_IP_TO_CLIENT, on_event, NULL);
     settings_on_change(on_settings);
     on_settings();
     xTaskCreate(wifi_task, "wifi_mgr", 4096, NULL, 4, NULL);

@@ -196,26 +196,46 @@ static void notify_transfer(void)
 
 /* ------------------------------------------------------------------ handlers */
 
-static esp_err_t conn_check(httpd_req_t *req)
+/* Captive portal: phones' "is there internet?" checks get a redirect to the dashboard.
+ * Android then shows "Sign in to network" and opens http://192.168.4.1/ in its built-in
+ * portal browser - no HTTPS-first upgrade, no data-saver proxy, no search-bar guessing,
+ * which is why typing the address into Chrome often never reached the watch. */
+static esp_err_t portal_redirect(httpd_req_t *req)
 {
-    const char *u = req->uri;
-    if (strstr(u, "204")) {
-        httpd_resp_set_status(req, "204 No Content");
-        return httpd_resp_send(req, NULL, 0);
+    ESP_LOGI(TAG, "portal: %s -> dashboard", req->uri);
+    httpd_resp_set_status(req, "302 Found");
+    httpd_resp_set_hdr(req, "Location", "http://192.168.4.1/");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-cache");
+    return httpd_resp_send(req, "", 0);
+}
+
+static esp_err_t conn_check(httpd_req_t *req) { return portal_redirect(req); }
+
+/* any unknown address (e.g. a phone opening http://anything/ through our DNS) -> dashboard */
+static esp_err_t not_found(httpd_req_t *req, httpd_err_code_t err)
+{
+    if (strncmp(req->uri, "/api/", 5) == 0) {
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "no such API");
+        return ESP_OK;
     }
-    httpd_resp_set_type(req, "text/plain");
-    if (strstr(u, "hotspot-detect")) {
-        httpd_resp_set_type(req, "text/html");
-        return httpd_resp_sendstr(req, "<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>");
-    }
-    if (strstr(u, "connecttest")) return httpd_resp_sendstr(req, "Microsoft Connect Test");
-    return httpd_resp_sendstr(req, "Microsoft NCSI");
+    return portal_redirect(req);
 }
 
 static esp_err_t page_index(httpd_req_t *req)
 {
     httpd_resp_set_type(req, "text/html; charset=utf-8");
-    return httpd_resp_send(req, index_html_start, index_html_end - index_html_start);
+    httpd_resp_set_hdr(req, "Cache-Control", "no-cache");
+    /* send in 4 KB pieces: needs only small network buffers on the watch */
+    size_t total = index_html_end - index_html_start, sent = 0;
+    esp_err_t err = ESP_OK;
+    while (sent < total && err == ESP_OK) {
+        size_t n = total - sent > 4096 ? 4096 : total - sent;
+        err = httpd_resp_send_chunk(req, index_html_start + sent, n);
+        sent += n;
+    }
+    if (err == ESP_OK) err = httpd_resp_send_chunk(req, NULL, 0);
+    ESP_LOGI(TAG, "page: sent %u of %u bytes (%s)", (unsigned)sent, (unsigned)total, esp_err_to_name(err));
+    return err;
 }
 
 static esp_err_t api_info(httpd_req_t *req)
@@ -864,10 +884,12 @@ static bool auth_ok(httpd_req_t *req)
 
 static esp_err_t guarded(httpd_req_t *req)
 {
+    ESP_LOGD(TAG, "%s %s", req->method == HTTP_POST ? "POST" : "GET", req->uri);
     if (!settings()->web_on) {
         return send_error(req, "403 Forbidden", "web manager is turned off on the watch");
     }
     if (!auth_ok(req)) {
+        ESP_LOGW(TAG, "password required for %s", req->uri);
         httpd_resp_set_status(req, "401 Unauthorized");
         httpd_resp_set_hdr(req, "WWW-Authenticate", "Basic realm=\"ESP-Watch\"");
         return httpd_resp_sendstr(req, "password required");
@@ -949,5 +971,6 @@ void web_server_start(web_transfer_cb_t on_transfer)
     for (size_t i = 0; i < sizeof(checks) / sizeof(checks[0]); i++) {
         httpd_register_uri_handler(server, &checks[i]);
     }
+    httpd_register_err_handler(server, HTTPD_404_NOT_FOUND, not_found);
     ESP_LOGI(TAG, "Web server running on port %d", config.server_port);
 }
