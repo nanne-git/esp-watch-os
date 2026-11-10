@@ -165,6 +165,7 @@ void weather_refresh(void)
 
 void weather_start(void)
 {
-    /* stack in PSRAM: this task never writes flash, so it may live in external RAM */
-    xTaskCreateWithCaps(weather_task, "weather", 6144, NULL, 2, &s_task, MALLOC_CAP_SPIRAM);
+    /* internal stack: a PSRAM stack gets corrupted when an interrupt hits while another task
+     * writes flash (PSRAM cache off) - it crashed the scheduler */
+    xTaskCreate(weather_task, "weather", 6144, NULL, 2, &s_task);
 }

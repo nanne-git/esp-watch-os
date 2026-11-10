@@ -153,6 +153,71 @@ static bool player_ensure(void)
 
 /* ------------------------------------------------------------------ player API */
 
+/* MP3 files usually start with an ID3v2 tag (title, artist, album art - often hundreds of
+ * KB). esp-audio-player doesn't skip it, and its is_mp3() check rewinds the file to 0, so
+ * the decoder chewed through the album-art JPEG; bytes that happen to look like a frame
+ * header made MP3Decode run on garbage and overflow the player's 4 KB stack (crash).
+ * Fix: give the player a FILE whose position 0 is the first byte after the tags. */
+static long id3_size(FILE *f)
+{
+    unsigned char h[10];
+    long start = 0;
+    while (fseek(f, start, SEEK_SET) == 0 && fread(h, 1, 10, f) == 10 && memcmp(h, "ID3", 3) == 0) {
+        /* size: 4 "syncsafe" bytes, 7 bits each; +10 header, +10 if a footer is present */
+        long size = ((long)(h[6] & 0x7F) << 21) | ((h[7] & 0x7F) << 14) | ((h[8] & 0x7F) << 7) | (h[9] & 0x7F);
+        start += 10 + size + ((h[5] & 0x10) ? 10 : 0);
+    }
+    return start;
+}
+
+typedef struct {
+    FILE *f;
+    long  base;     /* where the audio starts in the real file */
+} offset_file_t;
+
+static ssize_t of_read(void *c, char *buf, size_t n) { return fread(buf, 1, n, ((offset_file_t *)c)->f); }
+
+static int of_seek(void *c, off_t *pos, int whence)
+{
+    offset_file_t *o = c;
+    long target = (long)*pos;
+    if (whence == SEEK_SET) target += o->base;
+    if (fseek(o->f, target, whence) != 0) return -1;
+    *pos = ftell(o->f) - o->base;
+    return 0;
+}
+
+static int of_close(void *c)
+{
+    offset_file_t *o = c;
+    fclose(o->f);
+    free(o);
+    return 0;
+}
+
+/* opens path for the player; skips ID3 tags transparently */
+static FILE *open_audio(const char *path)
+{
+    FILE *f = fopen(path, "rb");
+    if (!f) return NULL;
+    long base = id3_size(f);
+    fseek(f, base, SEEK_SET);
+    if (base == 0) return f;
+    ESP_LOGI(TAG, "skipping %ld bytes of ID3 tags", base);
+    offset_file_t *o = malloc(sizeof(*o));
+    if (!o) return f;
+    o->f = f;
+    o->base = base;
+    cookie_io_functions_t io = { .read = of_read, .write = NULL, .seek = of_seek, .close = of_close };
+    FILE *wrapped = fopencookie(o, "rb", io);
+    if (!wrapped) {
+        free(o);
+        fseek(f, base, SEEK_SET);
+        return f;
+    }
+    return wrapped;
+}
+
 bool player_play(const char *path)
 {
     if (rec_active()) {
@@ -169,7 +234,7 @@ bool player_play(const char *path)
             vTaskDelay(pdMS_TO_TICKS(20));
         }
     }
-    FILE *f = fopen(path, "rb");
+    FILE *f = open_audio(path);
     if (!f) {
         ESP_LOGW(TAG, "can't open %s", path);
         return false;

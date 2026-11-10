@@ -867,7 +867,7 @@ void web_server_start(web_transfer_cb_t on_transfer)
     s_on_transfer = on_transfer;
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.max_uri_handlers = 48;
-    config.stack_size = 16384;
+    config.stack_size = 10240;
     config.lru_purge_enable = true;
     config.recv_wait_timeout = 10;
     config.send_wait_timeout = 10;

@@ -341,7 +341,7 @@ void hw_init(void)
         qmi8658_set_accel_odr(&s_imu, QMI8658_ACCEL_ODR_31_25HZ);   /* we read at 25 Hz */
         qmi8658_enable_accel(&s_imu, true);
         s_imu_ok = true;
-        xTaskCreateWithCaps(imu_task, "imu", 3072, NULL, 3, NULL, MALLOC_CAP_SPIRAM);
+        xTaskCreate(imu_task, "imu", 3072, NULL, 3, NULL);
         ESP_LOGI(TAG, "IMU ready");
     } else {
         ESP_LOGW(TAG, "IMU not found");

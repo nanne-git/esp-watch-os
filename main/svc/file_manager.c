@@ -35,6 +35,7 @@
 #include "hw.h"
 #include "mbedtls/base64.h"
 #include "lua_apps.h"
+#include "audio.h"
 #include "esp_memory_utils.h"
 #include "esp_heap_caps.h"
 #include "phone.h"
@@ -768,6 +769,34 @@ static bool device_command(const char *cmd, char *a1, char *a2, char *text, char
     if (strcmp(cmd, "putb") == 0) { cmd_putb(a1, text); return true; }
     if (strcmp(cmd, "apps") == 0) { cmd_apps(); return true; }
     if (strcmp(cmd, "tasks") == 0) { cmd_tasks(); return true; }
+    if (strcmp(cmd, "hex") == 0 && a1 && text) {         /* hex <offset> <card path>: 32 bytes */
+        const char *path = text;          /* text = everything after the offset */
+        char abs[FM_MAX_PATH];
+        if (!fm_card_path(path, abs, sizeof(abs))) { reply("usage: hex <offset> <path>"); return true; }
+        FILE *f = fopen(abs, "rb");
+        if (!f) { reply("can't open"); return true; }
+        /* read through a big PSRAM buffer, like the audio player does, then show 32 bytes */
+        unsigned char *big = heap_caps_malloc(8192, MALLOC_CAP_SPIRAM);
+        unsigned char b[32];
+        fseek(f, atol(a1), SEEK_SET);
+        size_t n = big ? fread(big, 1, 8192, f) : 0;
+        if (n > 32) n = 32;
+        if (big) memcpy(b, big, n);
+        free(big);
+        fclose(f);
+        char line[120];
+        size_t k = 0;
+        for (size_t i = 0; i < n; i++) k += snprintf(line + k, sizeof(line) - k, "%02X ", b[i]);
+        reply("%s", n ? line : "(no data)");
+        return true;
+    }
+    if (strcmp(cmd, "play") == 0 && line_rest) {       /* play <card path>: test the music player */
+        char abs[FM_MAX_PATH];
+        const char *p = line_rest;
+        if (fm_card_path(p, abs, sizeof(abs))) reply(player_play(abs) ? "playing" : "play failed");
+        else reply("bad path");
+        return true;
+    }
     if (strcmp(cmd, "app") == 0 && a1) {
         if (strcmp(a1, "run") == 0 && a2) reply(lua_apps_run(a2) ? "running %s" : "no app '%s' (needs /apps/%s/main.lua)", a2, a2);
         else if (strcmp(a1, "stop") == 0) { lua_apps_stop(); reply("ok"); }

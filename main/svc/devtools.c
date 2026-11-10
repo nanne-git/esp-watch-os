@@ -11,6 +11,7 @@
 #include "esp_system.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
 #include "nvs.h"
 #include "ui.h"
 
@@ -39,27 +40,34 @@ static void ring_put(const char *s, size_t n)
     portEXIT_CRITICAL(&s_mux);
 }
 
-/* every ESP_LOGx line goes through here: keep a copy, then print as usual */
+/* Every ESP_LOGx line goes through here: keep a copy, then print as usual.
+ * Uses ONE static buffer (guarded by a mutex) instead of the caller's stack: this runs in
+ * every task that logs, including small ones like the 4 KB audio decoder task, and a
+ * 512-byte stack buffer + vsnprintf overflowed them. If the buffer is busy the line is
+ * still printed, just not captured. */
+static SemaphoreHandle_t s_fmt_lock;
+static char s_fmt_buf[256];
+
 static int log_vprintf(const char *fmt, va_list ap)
 {
-    char line[256];
-    va_list copy;
-    va_copy(copy, ap);
-    int n = vsnprintf(line, sizeof(line), fmt, copy);
-    va_end(copy);
-    if (n > 0) {
-        size_t len = n < (int)sizeof(line) ? (size_t)n : sizeof(line) - 1;
-        /* strip the colour escape codes the console uses */
-        char clean[256];
-        size_t c = 0;
-        for (size_t i = 0; i < len; i++) {
-            if (line[i] == 0x1B) {
-                while (i < len && line[i] != 'm') i++;
-                continue;
+    if (s_fmt_lock && xSemaphoreTake(s_fmt_lock, 0) == pdTRUE) {
+        va_list copy;
+        va_copy(copy, ap);
+        int n = vsnprintf(s_fmt_buf, sizeof(s_fmt_buf), fmt, copy);
+        va_end(copy);
+        if (n > 0) {
+            size_t len = n < (int)sizeof(s_fmt_buf) ? (size_t)n : sizeof(s_fmt_buf) - 1;
+            size_t c = 0;
+            for (size_t i = 0; i < len; i++) {        /* strip colour codes, in place */
+                if (s_fmt_buf[i] == 0x1B) {
+                    while (i < len && s_fmt_buf[i] != 'm') i++;
+                    continue;
+                }
+                s_fmt_buf[c++] = s_fmt_buf[i];
             }
-            clean[c++] = line[i];
+            ring_put(s_fmt_buf, c);
         }
-        ring_put(clean, c);
+        xSemaphoreGive(s_fmt_lock);
     }
     return s_orig_vprintf ? s_orig_vprintf(fmt, ap) : vprintf(fmt, ap);
 }
@@ -222,6 +230,7 @@ bool dev_perf_overlay_on(void) { return s_perf_on; }
 void devtools_init(void)
 {
     s_ring = heap_caps_calloc(1, LOG_RING_SIZE, MALLOC_CAP_SPIRAM);
+    s_fmt_lock = xSemaphoreCreateMutex();
     s_orig_vprintf = esp_log_set_vprintf(log_vprintf);
 
     nvs_handle_t h;

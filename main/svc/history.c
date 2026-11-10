@@ -171,5 +171,5 @@ int history_days(history_day_t *out, int n)
 
 void history_start(void)
 {
-    xTaskCreate(history_task, "history", 4096, NULL, 2, NULL);
+    xTaskCreate(history_task, "history", 3072, NULL, 2, NULL);
 }

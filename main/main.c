@@ -32,7 +32,7 @@
 #include "web_server.h"
 #include "wifi_svc.h"
 
-#define DRAW_LINES 24
+#define DRAW_LINES 16
 
 static const char *TAG = "main";
 
