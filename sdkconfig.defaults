@@ -88,3 +88,16 @@ CONFIG_LV_USE_QRCODE=y
 # ---- audio player ----
 CONFIG_AUDIO_PLAYER_ENABLE_MP3=y
 CONFIG_AUDIO_PLAYER_ENABLE_WAV=y
+
+# ---- developer tools ----
+# crash dump saved to flash, shown in the web dashboard (Developer tab)
+CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
+CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF=y
+CONFIG_ESP_COREDUMP_CHECKSUM_CRC32=y
+# per-task CPU usage + stack info (task monitor)
+CONFIG_FREERTOS_USE_TRACE_FACILITY=y
+CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS=y
+CONFIG_FREERTOS_VTASKLIST_INCLUDE_COREID=y
+# on-screen FPS / CPU overlay (hidden until enabled in Settings > Developer)
+CONFIG_LV_USE_SYSMON=y
+CONFIG_LV_USE_PERF_MONITOR=y

@@ -27,6 +27,7 @@
 #include "esp_vfs_fat.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "sdmmc_cmd.h"
 #include "wifi_svc.h"
@@ -59,6 +60,9 @@ static fm_send_fn_t  s_ble_send;
 static QueueHandle_t s_queue;
 static sdmmc_card_t *s_card;
 static bool          s_reply_to_usb;              /* where the current command's replies go */
+static char         *s_capture;                   /* web console: collect replies here */
+static size_t        s_capture_len, s_capture_max;
+static SemaphoreHandle_t s_cmd_lock;              /* one command at a time */
 static char          s_cwd[MAX_PATH_LEN] = MOUNT_POINT;
 static char          s_clip[MAX_PATH_LEN];        /* clipboard: path of copied/cut file */
 static bool          s_clip_is_cut;
@@ -78,7 +82,16 @@ static void reply(const char *fmt, ...)
     if (n >= (int)sizeof(buf)) {
         n = sizeof(buf) - 1;
     }
-    if (s_reply_to_usb) {
+    if (s_capture) {
+        int room = (int)(s_capture_max - s_capture_len) - 2;
+        if (room > 0) {
+            int k = n < room ? n : room;
+            memcpy(s_capture + s_capture_len, buf, k);
+            s_capture_len += k;
+            s_capture[s_capture_len++] = '\n';
+            s_capture[s_capture_len] = '\0';
+        }
+    } else if (s_reply_to_usb) {
         printf("%s\n", buf);
     } else {
         s_ble_send(buf, n);
@@ -761,8 +774,10 @@ static void worker_task(void *arg)
     while (true) {
         if (xQueueReceive(s_queue, &c, portMAX_DELAY) == pdTRUE) {
             ESP_LOGI(TAG, "%s> %s", c.from_usb ? "usb" : "ble", c.text);
+            xSemaphoreTake(s_cmd_lock, portMAX_DELAY);
             s_reply_to_usb = c.from_usb;
             run_command(c.text);
+            xSemaphoreGive(s_cmd_lock);
         }
     }
 }
@@ -897,6 +912,27 @@ bool fm_card_info(char *name, size_t name_size, uint64_t *total_bytes, uint64_t 
     return esp_vfs_fat_info(MOUNT_POINT, total_bytes, free_bytes) == ESP_OK;
 }
 
+size_t fm_run_capture(const char *line, char *out, size_t max)
+{
+    if (!max) return 0;
+    out[0] = '\0';
+    char cmd[MAX_CMD_LEN + 1];
+    strlcpy(cmd, line, sizeof(cmd));
+    xSemaphoreTake(s_cmd_lock, portMAX_DELAY);
+    s_capture = out;
+    s_capture_len = 0;
+    s_capture_max = max;
+    if (strcmp(cmd, "shot") == 0) {
+        reply("use the Screen tab for screenshots");
+    } else {
+        run_command(cmd);
+    }
+    s_capture = NULL;
+    size_t n = s_capture_len;
+    xSemaphoreGive(s_cmd_lock);
+    return n;
+}
+
 bool fm_mount(void) { return sd_mount(); }
 void fm_unmount(void) { sd_unmount(); }
 
@@ -912,6 +948,7 @@ bool fm_format(void)
 void file_manager_start(fm_send_fn_t ble_send)
 {
     s_ble_send = ble_send;
+    s_cmd_lock = xSemaphoreCreateMutex();
     s_queue = xQueueCreate(4, sizeof(command_t));
     sd_mount();
 

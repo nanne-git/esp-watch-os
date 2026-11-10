@@ -8,6 +8,7 @@
 #include "audio.h"
 #include "ble_svc.h"
 #include "bsp/esp-bsp.h"
+#include "devtools.h"
 #include "esp_event.h"
 #include "esp_log.h"
 #include "esp_netif.h"
@@ -42,6 +43,7 @@ void app_main(void)
         nvs_flash_erase();
         nvs_flash_init();
     }
+    devtools_init();       /* log capture + boot counter (needs NVS) */
     settings_init();
 
     /* dynamic frequency scaling: 80 MHz when idle, up to 160 MHz while someone holds a lock

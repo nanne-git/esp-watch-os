@@ -35,6 +35,8 @@
 #include "file_manager.h"
 #include "ui.h"
 #include "alarm.h"
+#include "devtools.h"
+#include "esp_flash.h"
 #include "ble_svc.h"
 #include "cJSON.h"
 #include "esp_app_desc.h"
@@ -701,6 +703,99 @@ static esp_err_t api_reboot(httpd_req_t *req)
     return ESP_OK;
 }
 
+
+/* ------------------------------------------------------------------ developer */
+
+/* GET /api/logs?from=N  -> log text since position N; header X-Log-Pos = next position */
+static esp_err_t api_logs(httpd_req_t *req)
+{
+    char v[16];
+    uint32_t pos = get_query_value(req, "from", v, sizeof(v)) ? strtoul(v, NULL, 10) : 0;
+    char *buf = malloc(16384);
+    if (!buf) return send_error(req, "500 Internal Server Error", "out of memory");
+    size_t n = devlog_read(&pos, buf, 16384);
+    char hdr[16];
+    snprintf(hdr, sizeof(hdr), "%lu", (unsigned long)pos);
+    httpd_resp_set_hdr(req, "X-Log-Pos", hdr);
+    httpd_resp_set_type(req, "text/plain; charset=utf-8");
+    esp_err_t err = httpd_resp_send(req, buf, n);
+    free(buf);
+    return err;
+}
+
+static esp_err_t api_tasks(httpd_req_t *req)
+{
+    cJSON *a = dev_tasks_json();
+    return a ? send_cjson(req, a) : send_error(req, "500 Internal Server Error", "out of memory");
+}
+
+static esp_err_t api_dev(httpd_req_t *req)
+{
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddStringToObject(o, "reset_reason", dev_reset_reason());
+    cJSON_AddNumberToObject(o, "boots", dev_boot_count());
+    cJSON_AddBoolToObject(o, "perf_overlay", dev_perf_overlay_on());
+    cJSON_AddNumberToObject(o, "min_free_ram", heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL));
+    cJSON_AddNumberToObject(o, "largest_ram_block", heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+    cJSON *crash = dev_crash_json();
+    if (crash) cJSON_AddItemToObject(o, "crash", crash);
+    return send_cjson(req, o);
+}
+
+static esp_err_t api_dev_perf(httpd_req_t *req)
+{
+    char v[4] = "0";
+    get_query_value(req, "on", v, sizeof(v));
+    dev_perf_overlay(v[0] == '1');
+    return send_ok(req);
+}
+
+/* download the raw core dump: decode on the laptop with
+ *   idf.py coredump-info -c coredump.bin   (same firmware build) */
+static esp_err_t api_crash_download(httpd_req_t *req)
+{
+    size_t addr = 0, size = 0;
+    if (!dev_crash_image(&addr, &size)) {
+        return send_error(req, "404 Not Found", "no crash report");
+    }
+    httpd_resp_set_type(req, "application/octet-stream");
+    httpd_resp_set_hdr(req, "Content-Disposition", "attachment; filename=\"coredump.bin\"");
+    char *buf = malloc(4096);
+    esp_err_t err = buf ? ESP_OK : ESP_ERR_NO_MEM;
+    for (size_t off = 0; err == ESP_OK && off < size; off += 4096) {
+        size_t n = size - off < 4096 ? size - off : 4096;
+        err = esp_flash_read(NULL, buf, addr + off, n);
+        if (err == ESP_OK) err = httpd_resp_send_chunk(req, buf, n);
+    }
+    free(buf);
+    if (err == ESP_OK) err = httpd_resp_send_chunk(req, NULL, 0);
+    return err;
+}
+
+static esp_err_t api_crash_erase(httpd_req_t *req)
+{
+    dev_crash_erase();
+    return send_ok(req);
+}
+
+/* POST /api/console  body = one command line (same commands as USB / BLE) */
+static esp_err_t api_console(httpd_req_t *req)
+{
+    char *body = read_body(req, 240);
+    if (!body) return send_error(req, "400 Bad Request", "empty command");
+    char *out = malloc(8192);
+    if (!out) {
+        free(body);
+        return send_error(req, "500 Internal Server Error", "out of memory");
+    }
+    fm_run_capture(body, out, 8192);
+    free(body);
+    httpd_resp_set_type(req, "text/plain; charset=utf-8");
+    esp_err_t err = httpd_resp_sendstr(req, out[0] ? out : "(no output)");
+    free(out);
+    return err;
+}
+
 /* ------------------------------------------------------------------ auth wrapper */
 
 static bool auth_ok(httpd_req_t *req)
@@ -781,6 +876,13 @@ void web_server_start(web_transfer_cb_t on_transfer)
         { .uri = "/api/ota/install", .method = HTTP_POST, .handler = api_ota_install },
         { .uri = "/api/ota/upload", .method = HTTP_POST, .handler = api_ota_upload },
         { .uri = "/api/reboot", .method = HTTP_POST, .handler = api_reboot },
+        { .uri = "/api/logs", .method = HTTP_GET, .handler = api_logs },
+        { .uri = "/api/tasks", .method = HTTP_GET, .handler = api_tasks },
+        { .uri = "/api/dev", .method = HTTP_GET, .handler = api_dev },
+        { .uri = "/api/dev/perf", .method = HTTP_POST, .handler = api_dev_perf },
+        { .uri = "/api/crash/download", .method = HTTP_GET, .handler = api_crash_download },
+        { .uri = "/api/crash/erase", .method = HTTP_POST, .handler = api_crash_erase },
+        { .uri = "/api/console", .method = HTTP_POST, .handler = api_console },
     };
     for (size_t i = 0; i < sizeof(routes) / sizeof(routes[0]); i++) {
         httpd_uri_t r = routes[i];

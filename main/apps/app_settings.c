@@ -22,6 +22,7 @@
 #include "esp_idf_version.h"
 #include "esp_mac.h"
 #include "esp_timer.h"
+#include "devtools.h"
 #include "file_manager.h"
 #include "hw.h"
 #include "ota.h"
@@ -832,6 +833,82 @@ static void about_build(lv_obj_t *c, void *ctx)
 void app_about_open(void) { ui_page_push("About", about_build, NULL, NULL); }
 static void open_about(lv_event_t *e) { app_about_open(); }
 
+/* ======================================================================== Developer */
+
+static lv_obj_t *s_dev_tasks;
+
+static void dev_refresh(void *ctx)
+{
+    if (!s_dev_tasks) return;
+    cJSON *a = dev_tasks_json();
+    if (!a) return;
+    /* top 8 by CPU */
+    char buf[512] = "";
+    int n = cJSON_GetArraySize(a);
+    bool used[64] = { 0 };
+    for (int k = 0; k < 8 && k < n; k++) {
+        int best = -1;
+        double bc = -1;
+        for (int i = 0; i < n && i < 64; i++) {
+            double c = cJSON_GetObjectItem(cJSON_GetArrayItem(a, i), "cpu")->valuedouble;
+            if (!used[i] && c > bc) { bc = c; best = i; }
+        }
+        if (best < 0) break;
+        used[best] = true;
+        cJSON *t = cJSON_GetArrayItem(a, best);
+        char line[64];
+        snprintf(line, sizeof(line), "%-12s %5.1f%%  %5d B\n", cJSON_GetObjectItem(t, "name")->valuestring, bc,
+                 cJSON_GetObjectItem(t, "stack_free")->valueint);
+        strlcat(buf, line, sizeof(buf));
+    }
+    cJSON_Delete(a);
+    lv_label_set_text(s_dev_tasks, buf);
+}
+
+static void perf_toggle(lv_event_t *e)
+{
+    dev_perf_overlay(lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED));
+}
+
+static void crash_clear(void *u) { dev_crash_erase(); ui_page_rebuild(); }
+static void crash_clear_click(lv_event_t *e) { ui_confirm("Clear crash report", "Delete the saved crash report?", "Clear", UI_RED, crash_clear, NULL); }
+
+static void dev_build(lv_obj_t *c, void *ctx)
+{
+    char b[48];
+    ui_row(c, NULL, 0, "Last reset", dev_reset_reason(), NULL, NULL);
+    snprintf(b, sizeof(b), "%lu", (unsigned long)dev_boot_count());
+    ui_row(c, NULL, 0, "Boot count", b, NULL, NULL);
+    snprintf(b, sizeof(b), "%u KB (min %u KB)", (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024),
+             (unsigned)(heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL) / 1024));
+    ui_row(c, NULL, 0, "Internal RAM", b, NULL, NULL);
+    cJSON *cr = dev_crash_json();
+    if (cr) {
+        snprintf(b, sizeof(b), "%s @ %s", cJSON_GetObjectItem(cr, "task")->valuestring,
+                 cJSON_GetObjectItem(cr, "pc")->valuestring);
+        ui_row(c, LV_SYMBOL_WARNING, UI_RED, "Last crash", b, NULL, NULL);
+        ui_row(c, LV_SYMBOL_TRASH, UI_CARD2, "Clear crash report", NULL, crash_clear_click, NULL);
+        cJSON_Delete(cr);
+    } else {
+        ui_row(c, LV_SYMBOL_OK, UI_GREEN, "Crash reports", "none", NULL, NULL);
+    }
+    ui_row_switch(c, LV_SYMBOL_EYE_OPEN, UI_PURPLE, "FPS / CPU overlay", dev_perf_overlay_on(), perf_toggle, NULL);
+    ui_section(c, "BUSIEST TASKS (CPU, FREE STACK)");
+    lv_obj_t *card = ui_card(c);
+    s_dev_tasks = ui_label(card, "measuring...", &lv_font_montserrat_14, 0xD1D1D6);
+    lv_label_set_long_mode(s_dev_tasks, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(s_dev_tasks, lv_pct(100));
+    lv_obj_t *t = ui_label(c, "More in the web manager > Developer: live logs, console, crash download.",
+                           &lv_font_montserrat_14, UI_MUTED);
+    lv_label_set_long_mode(t, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(t, lv_pct(100));
+    dev_refresh(NULL);
+    ui_page_set_refresh(dev_refresh);
+}
+
+static void dev_close(void *ctx) { s_dev_tasks = NULL; }
+static void open_dev(lv_event_t *e) { ui_page_push("Developer", dev_build, dev_close, NULL); }
+
 /* ======================================================================== main list */
 
 static void settings_build(lv_obj_t *c, void *ctx)
@@ -852,6 +929,7 @@ static void settings_build(lv_obj_t *c, void *ctx)
     ui_row(c, LV_SYMBOL_GPS, UI_TEAL, "Weather location", settings()->city, open_location, NULL);
     ui_row(c, LV_SYMBOL_SHUFFLE, UI_GREEN, "Activity", NULL, open_activity, NULL);
     ui_row(c, LV_SYMBOL_DOWNLOAD, UI_BLUE, "Updates", NULL, open_updates, NULL);
+    ui_row(c, LV_SYMBOL_WARNING, UI_CARD2, "Developer", NULL, open_dev, NULL);
     ui_row(c, LV_SYMBOL_HOME, UI_CARD2, "About", NULL, open_about, NULL);
 }
 

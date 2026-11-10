@@ -779,6 +779,7 @@ void ui_start(void)
     lv_theme_t *th = lv_theme_default_init(NULL, ui_accent(), lv_color_hex(UI_RED), true,
                                            &lv_font_montserrat_16);
     lv_display_set_theme(NULL, th);
+    lv_sysmon_hide_performance(NULL);     /* FPS/CPU overlay: Settings > Developer */
 
     s_home = new_screen();
     lv_obj_add_flag(s_home, LV_OBJ_FLAG_CLICKABLE);

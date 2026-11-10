@@ -5,3 +5,4 @@ otadata,  data, ota,     0x19000,  0x2000
 phy_init, data, phy,     0x1b000,  0x1000
 ota_0,    app,  ota_0,   0x20000,  6M
 ota_1,    app,  ota_1,   ,         6M
+coredump, data, coredump, ,        256K

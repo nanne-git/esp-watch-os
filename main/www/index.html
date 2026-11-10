@@ -62,7 +62,7 @@
   <button data-t="dash" class="on">Dashboard</button><button data-t="screen">Screen</button>
   <button data-t="files">Files</button><button data-t="settings">Settings</button>
   <button data-t="alarms">Alarms</button><button data-t="notif">Notifications</button>
-  <button data-t="update">Updates</button>
+  <button data-t="update">Updates</button><button data-t="dev">Developer</button>
 </nav>
 <main>
 <!-- ============ dashboard ============ -->
@@ -140,6 +140,27 @@
     <div class="row"><input type="file" id="ofile" accept=".bin"><button class="b p" onclick="uploadFw()">Upload &amp; install</button></div>
     <p class="muted">Use <code>build/esp-watch-os.bin</code>. If the new firmware fails to start, the watch automatically goes back to the previous one.</p></div>
 </section>
+
+<!-- ============ developer ============ -->
+<section id="dev">
+  <div class="grid" id="devinfo"></div>
+  <div class="card" style="margin-top:12px"><h3>Crash report</h3><div id="crash" class="muted">…</div>
+    <div class="row" id="crashbtns" style="display:none"><a class="b" href="/api/crash/download" style="text-decoration:none">⬇ Download coredump.bin</a>
+      <button class="b d" onclick="post('/api/crash/erase').then(loadDev)">Clear</button></div>
+    <p class="muted">Decode on the laptop (same firmware build): <code>idf.py coredump-info -c coredump.bin</code></p></div>
+  <div class="card" style="margin-top:12px"><h3>Console</h3>
+    <div class="row"><input id="cin" placeholder="status · ls / · set volume 20 · scan · help" style="flex:1" onkeydown="if(event.key==='Enter')runCmd()">
+      <button class="b p" onclick="runCmd()">Run</button></div>
+    <pre id="cout" style="white-space:pre-wrap;max-height:220px;overflow:auto;margin:0"></pre></div>
+  <div class="card" style="margin-top:12px"><h3>Tasks <span class="muted">(CPU % since last refresh, free stack in bytes)</span></h3>
+    <table id="ttab"></table></div>
+  <div class="card" style="margin-top:12px"><h3>Live log</h3>
+    <div class="row"><button class="b" id="lpause" onclick="logPaused=!logPaused;this.textContent=logPaused?'Resume':'Pause'">Pause</button>
+      <button class="b" onclick="$('logbox').textContent=''">Clear view</button>
+      <button class="b" onclick="dlLog()">⬇ Save log</button>
+      <label class="muted"><input type="checkbox" id="perf" onchange="post('/api/dev/perf?on='+(this.checked?1:0))"> FPS / CPU overlay on the watch</label></div>
+    <pre id="logbox" style="white-space:pre-wrap;height:320px;overflow:auto;margin:0;font-size:12px;background:var(--bg);padding:8px;border-radius:8px"></pre></div>
+</section>
 </main>
 <div id="toast"></div>
 
@@ -162,7 +183,7 @@ function dur(s) { const d = Math.floor(s / 86400), h = Math.floor(s / 3600) % 24
 $('nav').onclick = e => { const t = e.target.dataset.t; if (!t) return; tab = t;
   document.querySelectorAll('nav button').forEach(b => b.classList.toggle('on', b.dataset.t === t));
   document.querySelectorAll('section').forEach(s => s.classList.toggle('on', s.id === t));
-  ({ dash: refreshStatus, screen: shot, files: () => loadFiles(cwd), settings: loadSettings, alarms: loadAlarms, notif: loadNotifs, update: pollOta })[t]();
+  ({ dash: refreshStatus, screen: shot, files: () => loadFiles(cwd), settings: loadSettings, alarms: loadAlarms, notif: loadNotifs, update: pollOta, dev: openDev })[t]();
 };
 
 /* ---------- dashboard ---------- */
@@ -345,6 +366,43 @@ function uploadFw() { const f = $('ofile').files[0]; if (!f) return toast('Choos
   x.upload.onprogress = e => { if (e.lengthComputable) { $('obar').style.width = (e.loaded / e.total * 100) + '%'; $('ostat').textContent = `Uploading… ${Math.round(e.loaded / e.total * 100)}%`; } };
   x.onload = () => { if (x.status < 300) { toast('Installed - restarting'); $('ostat').textContent = 'Restarting…'; setTimeout(pollOta, 8000); } else toast('Upload failed: ' + x.responseText, true); };
   x.send(f); }
+
+
+/* ---------- developer ---------- */
+let logPos = 0, logPaused = false, devTimer;
+async function loadDev() {
+  try { const d = await get('/api/dev');
+    const cards = [['Last reset', d.reset_reason, 'boot #' + d.boots], ['Lowest free RAM', fmt(d.min_free_ram), 'since boot'],
+                   ['Largest RAM block', fmt(d.largest_ram_block), 'fragmentation check']];
+    $('devinfo').innerHTML = '';
+    for (const [h, v, sub] of cards) { const c = document.createElement('div'); c.className = 'card';
+      c.innerHTML = '<h3></h3><div class="big"></div><div class="muted"></div>'; c.children[0].textContent = h; c.children[1].textContent = v; c.children[2].textContent = sub; $('devinfo').appendChild(c); }
+    $('perf').checked = d.perf_overlay;
+    if (d.crash) { $('crash').textContent = `Task "${d.crash.task}" crashed at ${d.crash.pc} (cause ${d.crash.cause}, address ${d.crash.address})\nBacktrace: ${d.crash.backtrace.join(' ')}`;
+      $('crash').style.whiteSpace = 'pre-wrap'; $('crashbtns').style.display = 'flex'; }
+    else { $('crash').textContent = 'No crash saved - good.'; $('crashbtns').style.display = 'none'; }
+  } catch (e) { toast(e.message, true); }
+}
+async function loadTasks() {
+  try { const a = await get('/api/tasks'); a.sort((x, y) => y.cpu - x.cpu);
+    const t = $('ttab'); t.innerHTML = '<tr><th>Task</th><th>CPU %</th><th>Free stack</th><th>Prio</th><th>Core</th></tr>';
+    for (const k of a) { const r = t.insertRow(); r.innerHTML = '<td></td><td></td><td></td><td></td><td></td>';
+      r.cells[0].textContent = k.name; r.cells[1].textContent = k.cpu.toFixed(1); r.cells[2].textContent = k.stack_free;
+      r.cells[2].style.color = k.stack_free < 512 ? 'var(--danger)' : ''; r.cells[3].textContent = k.prio; r.cells[4].textContent = k.core < 0 ? 'any' : k.core; }
+  } catch (_) {}
+}
+async function pollLog() {
+  if (!logPaused) { try { const r = await fetch('/api/logs?from=' + logPos); const txt = await r.text();
+      logPos = Number(r.headers.get('X-Log-Pos')) || logPos;
+      if (txt) { const b = $('logbox'); const atEnd = b.scrollTop + b.clientHeight >= b.scrollHeight - 20;
+        b.textContent = (b.textContent + txt).slice(-200000); if (atEnd) b.scrollTop = b.scrollHeight; } } catch (_) {} }
+}
+function devLoop() { clearTimeout(devTimer); if (tab !== 'dev') return; pollLog(); loadTasks(); devTimer = setTimeout(devLoop, 2000); }
+function openDev() { loadDev(); devLoop(); }
+async function runCmd() { const c = $('cin').value.trim(); if (!c) return;
+  try { const r = await fetch('/api/console', { method: 'POST', body: c }); $('cout').textContent = '> ' + c + '\n' + await r.text() + '\n' + $('cout').textContent; $('cin').value = ''; }
+  catch (e) { toast(e.message, true); } }
+function dlLog() { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([$('logbox').textContent], { type: 'text/plain' })); a.download = 'watch-log.txt'; a.click(); }
 
 refreshStatus(); setInterval(() => { if (tab === 'dash') refreshStatus(); }, 10000);
 </script>
