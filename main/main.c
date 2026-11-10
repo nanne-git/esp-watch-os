@@ -66,13 +66,13 @@ void app_main(void)
             .task_max_sleep_ms = 500,
             .timer_period_ms = 10,
         },
-        /* LVGL draws into a large PSRAM buffer; the port copies 20-line chunks into a small
-         * internal DMA buffer for the SPI transfer, so Wi-Fi/BLE fragmenting internal RAM
-         * can't starve the display */
-        .buffer_size = BSP_LCD_H_RES * 120,
-        .trans_size = BSP_LCD_H_RES * 20,
+        /* Draw buffer in INTERNAL DMA RAM (24 lines = ~20 KB), allocated once at boot.
+         * The SPI hardware can't read PSRAM, and this esp_lvgl_port ignores trans_size, so a
+         * PSRAM buffer made the SPI driver allocate a temporary internal copy of every flush
+         * (up to 98 KB). When that failed the panel silently kept old pixels. */
+        .buffer_size = BSP_LCD_H_RES * 24,
         .double_buffer = false,
-        .flags = { .buff_dma = false, .buff_spiram = true },
+        .flags = { .buff_dma = true, .buff_spiram = false },
     };
     lv_display_t *d = bsp_display_start_with_config(&disp);
     if (!d) {

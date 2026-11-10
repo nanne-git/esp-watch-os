@@ -182,5 +182,5 @@ static void console_task(void *arg)
 
 void net_console_start(void)
 {
-    xTaskCreate(console_task, "netcon", 6144, NULL, 3, NULL);
+    xTaskCreate(console_task, "netcon", 4096, NULL, 3, NULL);
 }

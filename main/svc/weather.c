@@ -10,6 +10,7 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "esp_heap_caps.h"
 #include "settings.h"
 #include "ui.h"
 #include "wifi_svc.h"
@@ -164,5 +165,6 @@ void weather_refresh(void)
 
 void weather_start(void)
 {
-    xTaskCreate(weather_task, "weather", 6144, NULL, 2, &s_task);
+    /* stack in PSRAM: this task never writes flash, so it may live in external RAM */
+    xTaskCreateWithCaps(weather_task, "weather", 6144, NULL, 2, &s_task, MALLOC_CAP_SPIRAM);
 }

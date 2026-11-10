@@ -11,6 +11,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
+#include "esp_heap_caps.h"
 #include "pcf85063a.h"
 #include "qmi8658.h"
 #undef M_PI          /* the driver defines its own; use the libc one */
@@ -340,7 +341,7 @@ void hw_init(void)
         qmi8658_set_accel_odr(&s_imu, QMI8658_ACCEL_ODR_31_25HZ);   /* we read at 25 Hz */
         qmi8658_enable_accel(&s_imu, true);
         s_imu_ok = true;
-        xTaskCreate(imu_task, "imu", 3072, NULL, 3, NULL);
+        xTaskCreateWithCaps(imu_task, "imu", 3072, NULL, 3, NULL, MALLOC_CAP_SPIRAM);
         ESP_LOGI(TAG, "IMU ready");
     } else {
         ESP_LOGW(TAG, "IMU not found");

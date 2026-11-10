@@ -35,6 +35,8 @@
 #include "hw.h"
 #include "mbedtls/base64.h"
 #include "lua_apps.h"
+#include "esp_memory_utils.h"
+#include "esp_heap_caps.h"
 #include "phone.h"
 #include "settings.h"
 #include "timesvc.h"
@@ -700,6 +702,25 @@ static void cmd_putb(const char *mode, const char *text)
     reply(ok ? "OK %u" : "ERR write failed", (unsigned)n);
 }
 
+/* tasks: name, free stack, where the stack lives - to find internal-RAM hogs */
+static void cmd_tasks(void)
+{
+    reply("internal free %u, largest block %u, min ever %u | psram free %u",
+          (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL), (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
+          (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL), (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+    reply("dma-capable free %u, largest %u", (unsigned)heap_caps_get_free_size(MALLOC_CAP_DMA),
+          (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DMA));
+    UBaseType_t n = uxTaskGetNumberOfTasks();
+    TaskStatus_t *ts = calloc(n + 4, sizeof(TaskStatus_t));
+    if (!ts) return;
+    n = uxTaskGetSystemState(ts, n + 4, NULL);
+    for (UBaseType_t i = 0; i < n; i++) {
+        bool ext = esp_ptr_external_ram(pxTaskGetStackStart(ts[i].xHandle));
+        reply("%-16s free %5u  %s", ts[i].pcTaskName, (unsigned)ts[i].usStackHighWaterMark, ext ? "psram" : "INTERNAL");
+    }
+    free(ts);
+}
+
 static void cmd_apps(void)
 {
     lua_app_info_t *list = calloc(32, sizeof(*list));
@@ -746,6 +767,7 @@ static bool device_command(const char *cmd, char *a1, char *a2, char *text, char
     if (strcmp(cmd, "restart") == 0) { power_restart(); return true; }
     if (strcmp(cmd, "putb") == 0) { cmd_putb(a1, text); return true; }
     if (strcmp(cmd, "apps") == 0) { cmd_apps(); return true; }
+    if (strcmp(cmd, "tasks") == 0) { cmd_tasks(); return true; }
     if (strcmp(cmd, "app") == 0 && a1) {
         if (strcmp(a1, "run") == 0 && a2) reply(lua_apps_run(a2) ? "running %s" : "no app '%s' (needs /apps/%s/main.lua)", a2, a2);
         else if (strcmp(a1, "stop") == 0) { lua_apps_stop(); reply("ok"); }
@@ -1021,5 +1043,5 @@ void file_manager_start(fm_send_fn_t ble_send)
     if (usb_serial_jtag_driver_install(&usb_cfg) == ESP_OK) {
         xTaskCreate(usb_reader_task, "fm_usb", 3072, NULL, 4, NULL);
     }
-    xTaskCreate(worker_task, "fm_worker", 16384, NULL, 4, NULL);
+    xTaskCreate(worker_task, "fm_worker", 10240, NULL, 4, NULL);
 }
