@@ -82,11 +82,14 @@ The same text commands (plus file commands like `ls`, `cp`, `rm`) also work over
 
 ## Minimize and switch apps
 
-Like a phone: tap **–** (top-right of any app) or long-press **BOOT** to minimize. The app
-keeps running with its screen and state. **Hold –** (or long-press BOOT on the watch face) to
-see all minimized apps: tap one to continue where you left it, or ✕ / **Close all**. Opening a
-minimized app from the app list also resumes it. Up to 4 apps stay minimized (the oldest is
-closed after that); the screen going to sleep minimizes the open app too.
+Like a phone, from the **bottom edge** of any app (the little bar shows where):
+- **swipe up** = minimize: the app keeps running with its screen and state
+- **swipe up and hold** = see all minimized apps (tap one to continue, ✕ / **Close all**)
+- **swipe right** = back
+
+Also available: the **–** button top-right (tap = minimize, hold = app switcher) and
+long-press BOOT. Opening a minimized app from the app list resumes it. Up to 4 apps stay
+minimized (the oldest is closed after that); the screen going to sleep minimizes the open app.
 
 ## Make your own apps (Lua)
 

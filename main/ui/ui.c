@@ -87,7 +87,6 @@ static void cpu_busy(void)
 }
 
 static void render_start_cb(lv_event_t *e) { cpu_busy(); }     /* a frame is being drawn */
-static void touch_busy_cb(lv_event_t *e) { cpu_busy(); }       /* finger down / moving */
 
 lv_color_t ui_accent(void)
 {
@@ -122,6 +121,8 @@ static lv_obj_t *new_screen(void)
     lv_obj_remove_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
     return scr;
 }
+
+static void add_home_bar(lv_obj_t *scr);
 
 static void minimize_btn_cb(lv_event_t *e) { ui_minimize(); }
 static void switcher_btn_cb(lv_event_t *e)
@@ -199,6 +200,7 @@ static void build_page(page_t *p)
     if (p->build) {
         p->build(c, p->ctx);
     }
+    if (in_app) add_home_bar(p->scr);       /* on top of the content */
 }
 
 static lv_obj_t *push(const char *title, page_build_t build, page_fn_t on_close, void *ctx, bool raw)
@@ -1004,11 +1006,107 @@ void ui_inject_key(const char *key)
         ui_page_pop();
     } else if (strcmp(key, "home") == 0) {
         ui_minimize();
+    } else if (strcmp(key, "edge") == 0 || strcmp(key, "edgehold") == 0) {
+        ui_unlock();                   /* inj_push takes the lock itself */
+        bool hold = strcmp(key, "edgehold") == 0;
+        for (int i = 0; i <= 8; i++) inj_push(205, 498 - i * 25, true, 1);   /* bottom edge, up */
+        if (hold) inj_push(205, 298, true, 25);                              /* ~0.8 s still */
+        inj_push(205, 298, false, 2);
+        return;
     } else if (strcmp(key, "recents") == 0) {
         ui_minimize();                 /* like holding "-": park the app, show the switcher */
         ui_open_recents();
     }
     ui_unlock();
+}
+
+/* ======================================================================== touch filter
+ * LVGL 9.5 does not deliver PRESSED/PRESSING/RELEASED to input-device callbacks, so we sit
+ * in front of the touch driver's read function and see every raw sample. Used for:
+ *  - edge gesture (phone-style, from the bottom edge of any app page):
+ *      swipe up -> minimize the app; swipe up and hold -> app switcher
+ *  - touch vibration feedback and the CPU speed boost while touching
+ * Actions run via lv_async_call: never change screens in the middle of input processing. */
+#define EDGE_ZONE_PX   44          /* start within this many px of the bottom */
+#define EDGE_SWIPE_PX  60          /* upward distance that counts as the gesture */
+#define EDGE_HOLD_MS   450         /* keep holding this long for the switcher */
+
+typedef struct {
+    lv_indev_read_cb_t orig;
+    bool       was_pressed;
+    bool       armed;          /* touch started in the bottom zone of an app page */
+    bool       caught;         /* gesture recognised: touch taken from the page */
+    bool       hold_fired;
+    lv_point_t start;
+    int64_t    t_caught;
+} touch_filter_t;
+
+static touch_filter_t s_tf_touch, s_tf_inj;
+
+static void edge_minimize_async(void *arg) { ui_minimize(); }
+static void edge_switcher_async(void *arg)
+{
+    ui_minimize();
+    ui_open_recents();
+}
+
+static void touch_filter(touch_filter_t *f, lv_indev_t *in, lv_indev_data_t *d)
+{
+    bool pressed = d->state == LV_INDEV_STATE_PRESSED;
+    lv_point_t p = d->point;
+    if (pressed && !f->was_pressed) {                       /* finger down */
+        cpu_busy();
+        if (f == &s_tf_touch && settings()->haptic_touch && settings()->vibration && s_awake) {
+            haptic_pulse(12);
+        }
+        f->armed = s_awake && !s_shield && p.y >= UI_H - EDGE_ZONE_PX && app_root_index() >= 0;
+        f->caught = f->hold_fired = false;
+        f->start = p;
+    } else if (pressed) {                                   /* moving / holding */
+        cpu_busy();
+        if (f->armed && f->start.y - p.y >= EDGE_SWIPE_PX) {
+            f->armed = false;
+            f->caught = true;
+            f->t_caught = esp_timer_get_time();
+            lv_indev_wait_release(in);                      /* the page gets nothing more */
+            haptic_pulse(15);
+        }
+        if (f->caught && !f->hold_fired && esp_timer_get_time() - f->t_caught > EDGE_HOLD_MS * 1000LL) {
+            f->hold_fired = true;
+            haptic_pulse(25);
+            lv_async_call(edge_switcher_async, NULL);
+        }
+    } else if (f->was_pressed) {                            /* finger up */
+        if (f->caught && !f->hold_fired) lv_async_call(edge_minimize_async, NULL);
+        f->armed = f->caught = false;
+    }
+    f->was_pressed = pressed;
+}
+
+static void touch_read_wrap(lv_indev_t *in, lv_indev_data_t *d)
+{
+    s_tf_touch.orig(in, d);
+    touch_filter(&s_tf_touch, in, d);
+}
+
+static void inj_read_wrap(lv_indev_t *in, lv_indev_data_t *d)
+{
+    s_tf_inj.orig(in, d);
+    touch_filter(&s_tf_inj, in, d);
+}
+
+/* small pill at the bottom of app pages: shows where to swipe */
+static void add_home_bar(lv_obj_t *scr)
+{
+    lv_obj_t *bar = lv_obj_create(scr);
+    lv_obj_remove_style_all(bar);
+    lv_obj_set_size(bar, 110, 6);
+    lv_obj_align(bar, LV_ALIGN_BOTTOM_MID, 0, -10);
+    lv_obj_set_style_radius(bar, 3, 0);
+    lv_obj_set_style_bg_color(bar, lv_color_hex(0x8E8E93), 0);
+    lv_obj_set_style_bg_opa(bar, LV_OPA_70, 0);
+    lv_obj_remove_flag(bar, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(bar, LV_OBJ_FLAG_IGNORE_LAYOUT | LV_OBJ_FLAG_FLOATING);
 }
 
 /* ======================================================================== benchmark */
@@ -1169,15 +1267,6 @@ static void on_settings(void)
     }
 }
 
-/* ======================================================================== touch haptics */
-
-static void touch_haptic_cb(lv_event_t *e)
-{
-    if (settings()->haptic_touch && settings()->vibration && s_awake) {
-        haptic_pulse(12);
-    }
-}
-
 /* ======================================================================== start */
 
 static void home_gesture_cb(lv_event_t *e)
@@ -1222,9 +1311,10 @@ void ui_start(void)
     /* short buzz on every touch (Settings > Sound > Touch feedback) */
     for (lv_indev_t *in = lv_indev_get_next(NULL); in; in = lv_indev_get_next(in)) {
         if (lv_indev_get_type(in) == LV_INDEV_TYPE_POINTER) {
-            lv_indev_add_event_cb(in, touch_haptic_cb, LV_EVENT_PRESSED, NULL);
-            lv_indev_add_event_cb(in, touch_busy_cb, LV_EVENT_PRESSED, NULL);
-            lv_indev_add_event_cb(in, touch_busy_cb, LV_EVENT_PRESSING, NULL);
+            if (!s_tf_touch.orig) {             /* the real touch screen */
+                s_tf_touch.orig = lv_indev_get_read_cb(in);
+                lv_indev_set_read_cb(in, touch_read_wrap);
+            }
         }
     }
 
@@ -1235,6 +1325,8 @@ void ui_start(void)
     lv_indev_set_read_cb(inj, inj_read_cb);
     s_inj = inj;
     lv_timer_pause(lv_indev_get_read_timer(inj));
+    s_tf_inj.orig = inj_read_cb;                  /* remote input goes through the same filter */
+    lv_indev_set_read_cb(inj, inj_read_wrap);
 
     lv_timer_create(tick_cb, 250, NULL);
     apply_brightness();
