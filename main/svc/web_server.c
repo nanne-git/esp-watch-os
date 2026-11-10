@@ -36,6 +36,7 @@
 #include "ui.h"
 #include "alarm.h"
 #include "devtools.h"
+#include "lua_apps.h"
 #include "esp_flash.h"
 #include "ble_svc.h"
 #include "cJSON.h"
@@ -723,6 +724,32 @@ static esp_err_t api_logs(httpd_req_t *req)
     return err;
 }
 
+/* ---- Lua apps ---- */
+static esp_err_t api_apps(httpd_req_t *req)
+{
+    return send_cjson(req, lua_apps_json());
+}
+
+static esp_err_t api_apps_run(httpd_req_t *req)
+{
+    char id[40];
+    if (!get_query_value(req, "id", id, sizeof(id))) return send_error(req, "400 Bad Request", "id missing");
+    return lua_apps_run(id) ? send_ok(req) : send_error(req, "404 Not Found", "no such app (needs /apps/<id>/main.lua)");
+}
+
+static esp_err_t api_apps_stop(httpd_req_t *req)
+{
+    lua_apps_stop();
+    return send_ok(req);
+}
+
+static esp_err_t api_apps_delete(httpd_req_t *req)
+{
+    char id[40];
+    if (!get_query_value(req, "id", id, sizeof(id))) return send_error(req, "400 Bad Request", "id missing");
+    return lua_apps_remove(id) ? send_ok(req) : send_error(req, "500 Internal Server Error", "could not remove");
+}
+
 static esp_err_t api_tasks(httpd_req_t *req)
 {
     cJSON *a = dev_tasks_json();
@@ -839,7 +866,7 @@ void web_server_start(web_transfer_cb_t on_transfer)
 {
     s_on_transfer = on_transfer;
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    config.max_uri_handlers = 40;
+    config.max_uri_handlers = 48;
     config.stack_size = 16384;
     config.lru_purge_enable = true;
     config.recv_wait_timeout = 10;
@@ -883,6 +910,10 @@ void web_server_start(web_transfer_cb_t on_transfer)
         { .uri = "/api/crash/download", .method = HTTP_GET, .handler = api_crash_download },
         { .uri = "/api/crash/erase", .method = HTTP_POST, .handler = api_crash_erase },
         { .uri = "/api/console", .method = HTTP_POST, .handler = api_console },
+        { .uri = "/api/apps", .method = HTTP_GET, .handler = api_apps },
+        { .uri = "/api/apps/run", .method = HTTP_POST, .handler = api_apps_run },
+        { .uri = "/api/apps/stop", .method = HTTP_POST, .handler = api_apps_stop },
+        { .uri = "/api/apps/delete", .method = HTTP_POST, .handler = api_apps_delete },
     };
     for (size_t i = 0; i < sizeof(routes) / sizeof(routes[0]); i++) {
         httpd_uri_t r = routes[i];

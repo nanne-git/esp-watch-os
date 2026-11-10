@@ -53,4 +53,15 @@
 | OTA from GitHub Releases (private repo token), browser upload, A/B rollback | 🧪 |
 | Remote management from outside home Wi-Fi (internet relay) | ⏳ chosen for later |
 | USB control tool (watchctl.py): status, screenshot, tap, swipe, settings, time | ✅ |
-| PIN lock, sleep tracking, battery history graph | ⏳ |
+| Steps kept across restarts, 14-day history, CSV logs (daily / hourly steps, battery) on SD, 7-day chart | 🧪 |
+| PIN lock, sleep tracking | ⏳ |
+
+## Apps & developers
+| Feature | State |
+|---|---|
+| Lua app runtime: /sdcard/apps, sandbox (memory + time limit), errors shown on watch | 🧪 (examples tested on laptop mock) |
+| Lua API: ui (labels, buttons, lists, sliders, switches, arcs, images, dialogs), timer, watch, storage, http, json | 🧪 |
+| Install / hot reload: web Apps tab with editor, folder upload, `watchctl app push`, USB `putb` | 🧪 |
+| Launcher shows installed apps; long-press to uninstall | 🧪 |
+| Network console (port 23, password), live log follow | 🧪 |
+| Log ring, crash dumps, task monitor, web console, FPS overlay | 🧪 |

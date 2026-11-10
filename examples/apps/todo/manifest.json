@@ -1,0 +1,8 @@
+{
+  "name": "To-do",
+  "icon": "list",
+  "color": "#FF9F0A",
+  "version": "1.0",
+  "description": "A small to-do list saved on the SD card",
+  "memory_kb": 512
+}

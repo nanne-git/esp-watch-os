@@ -80,6 +80,29 @@ python3 tools/watchctl.py time $(date +%s)
 
 The same text commands (plus file commands like `ls`, `cp`, `rm`) also work over BLE (Nordic UART).
 
+## Make your own apps (Lua)
+
+Apps are Lua scripts on the SD card (`/apps/<name>/main.lua`), installed and hot-reloaded without
+reflashing. Create one in the web dashboard's **Apps** tab (built-in editor, Ctrl+S = run on the
+watch) or from the laptop:
+
+```sh
+python3 tools/watchctl.py new myapp && python3 tools/watchctl.py app push myapp/ --run
+```
+
+Full guide and API: [docs/APPS.md](docs/APPS.md). Examples: [examples/apps/](examples/apps).
+
+## History
+
+Steps survive restarts (saved in flash), and the watch writes CSV files you can open in Excel to
+`/sdcard/History/`: `daily.csv`, `steps-YYYY-MM.csv` (hourly) and `battery-YYYY-MM.csv`
+(every 10 minutes). The Activity app shows the last 7 days.
+
+## Network console
+
+`nc esp-watch.local 23` (or the watch's IP address) gives the same command console as USB, over
+Wi-Fi. It asks for the web password. Type `log` to follow the live log, and `exit` to leave.
+
 ## Restore the original Waveshare firmware
 
 ```bash

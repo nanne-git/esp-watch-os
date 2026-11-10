@@ -37,6 +37,7 @@ bool rtc_write(const struct tm *utc);
 /* ---- motion sensor ---- */
 uint32_t imu_steps_today(void);
 void     imu_reset_steps(void);
+void     imu_add_steps(uint32_t n);         /* restore the count after a restart */
 bool     imu_ok(void);
 typedef void (*imu_wake_cb_t)(void);
 void imu_set_raise_cb(imu_wake_cb_t cb);   /* called when the wrist is raised */

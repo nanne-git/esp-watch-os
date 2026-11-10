@@ -22,6 +22,8 @@
 #include "timesvc.h"
 #include "ui.h"
 #include "weather.h"
+#include "history.h"
+#include "net_console.h"
 #include "web_server.h"
 #include "wifi_svc.h"
 
@@ -89,6 +91,8 @@ void app_main(void)
     wifi_svc_start();
     web_server_start(on_web_transfer);
     weather_start();
+    history_start();
+    net_console_start();
     ota_start();
 
     /* we got this far: keep this firmware (rollback protection for OTA updates) */

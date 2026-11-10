@@ -11,6 +11,8 @@
 #include "bsp/esp-bsp.h"
 #include "esp_timer.h"
 #include "apps.h"
+#include "lua_apps.h"
+#include "esp_heap_caps.h"
 #include "ble_svc.h"
 #include "hw.h"
 #include "phone.h"
@@ -378,6 +380,73 @@ static void app_tile_cb(lv_event_t *e)
     a->open();
 }
 
+/* Lua apps found on the SD card when the launcher opened */
+static lua_app_info_t *s_lua_apps;
+static int             s_lua_count;
+
+static void lua_tile_cb(lv_event_t *e)
+{
+    int i = (int)(intptr_t)lv_event_get_user_data(e);
+    if (i < s_lua_count) lua_app_open(s_lua_apps[i].id);
+}
+
+static void lua_uninstall_yes(void *user)
+{
+    int i = (int)(intptr_t)user;
+    if (i < s_lua_count && lua_apps_remove(s_lua_apps[i].id)) {
+        ui_toast("App removed");
+        ui_page_rebuild();
+    }
+}
+
+static void lua_tile_long_cb(lv_event_t *e)
+{
+    int i = (int)(intptr_t)lv_event_get_user_data(e);
+    if (i >= s_lua_count) return;
+    lv_indev_wait_release(lv_indev_active());   /* no click after the long press */
+    static char msg[96];
+    snprintf(msg, sizeof(msg), "Remove \"%s\" and its data from the SD card?", s_lua_apps[i].name);
+    ui_confirm("Uninstall app", msg, "Uninstall", UI_RED, lua_uninstall_yes, (void *)(intptr_t)i);
+}
+
+static lv_obj_t *app_tile(lv_obj_t *c, const char *name, const char *icon, bool icon_img, uint32_t color,
+                          lv_event_cb_t cb, void *user)
+{
+    lv_obj_t *t = lv_obj_create(c);
+    lv_obj_remove_style_all(t);
+    lv_obj_set_size(t, 118, 122);
+    lv_obj_add_flag(t, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_remove_flag(t, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_event_cb(t, cb, LV_EVENT_CLICKED, user);
+    lv_obj_set_style_opa(t, LV_OPA_70, LV_STATE_PRESSED);
+    lv_obj_t *ic = lv_obj_create(t);
+    lv_obj_remove_style_all(ic);
+    lv_obj_set_size(ic, 80, 80);
+    lv_obj_align(ic, LV_ALIGN_TOP_MID, 0, 0);
+    lv_obj_set_style_radius(ic, 24, 0);
+    lv_obj_set_style_clip_corner(ic, true, 0);
+    lv_obj_set_style_bg_opa(ic, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(ic, lv_color_hex(color), 0);
+    lv_obj_set_style_bg_grad_color(ic, lv_color_darken(lv_color_hex(color), 60), 0);
+    lv_obj_set_style_bg_grad_dir(ic, LV_GRAD_DIR_VER, 0);
+    lv_obj_remove_flag(ic, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(ic, LV_OBJ_FLAG_EVENT_BUBBLE);
+    if (icon_img) {
+        lv_obj_t *img = lv_image_create(ic);
+        lv_image_set_src(img, icon);
+        lv_obj_center(img);
+    } else {
+        lv_obj_t *il = ui_label(ic, icon, &lv_font_montserrat_32, UI_TEXT);
+        lv_obj_center(il);
+    }
+    lv_obj_t *nl = ui_label(t, name, &lv_font_montserrat_16, 0xE5E5EA);
+    lv_label_set_long_mode(nl, LV_LABEL_LONG_DOT);
+    lv_obj_set_width(nl, 118);
+    lv_obj_set_style_text_align(nl, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(nl, LV_ALIGN_BOTTOM_MID, 0, 0);
+    return t;
+}
+
 static void launcher_build(lv_obj_t *c, void *ctx)
 {
     lv_obj_set_flex_flow(c, LV_FLEX_FLOW_ROW_WRAP);
@@ -386,28 +455,15 @@ static void launcher_build(lv_obj_t *c, void *ctx)
     lv_obj_set_style_pad_hor(c, 6, 0);
     for (int i = 0; i < g_app_count; i++) {
         const app_def_t *a = &g_apps[i];
-        lv_obj_t *t = lv_obj_create(c);
-        lv_obj_remove_style_all(t);
-        lv_obj_set_size(t, 118, 122);
-        lv_obj_add_flag(t, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_remove_flag(t, LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_add_event_cb(t, app_tile_cb, LV_EVENT_CLICKED, (void *)a);
-        lv_obj_set_style_opa(t, LV_OPA_70, LV_STATE_PRESSED);
-        lv_obj_t *ic = lv_obj_create(t);
-        lv_obj_remove_style_all(ic);
-        lv_obj_set_size(ic, 80, 80);
-        lv_obj_align(ic, LV_ALIGN_TOP_MID, 0, 0);
-        lv_obj_set_style_radius(ic, 24, 0);
-        lv_obj_set_style_bg_opa(ic, LV_OPA_COVER, 0);
-        lv_obj_set_style_bg_color(ic, lv_color_hex(a->color), 0);
-        lv_obj_set_style_bg_grad_color(ic, lv_color_darken(lv_color_hex(a->color), 60), 0);
-        lv_obj_set_style_bg_grad_dir(ic, LV_GRAD_DIR_VER, 0);
-        lv_obj_remove_flag(ic, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_add_flag(ic, LV_OBJ_FLAG_EVENT_BUBBLE);
-        lv_obj_t *il = ui_label(ic, a->icon, &lv_font_montserrat_32, UI_TEXT);
-        lv_obj_center(il);
-        lv_obj_t *nl = ui_label(t, a->name, &lv_font_montserrat_16, 0xE5E5EA);
-        lv_obj_align(nl, LV_ALIGN_BOTTOM_MID, 0, 0);
+        app_tile(c, a->name, a->icon, false, a->color, app_tile_cb, (void *)a);
+    }
+    /* installed Lua apps (SD card /apps) */
+    if (!s_lua_apps) s_lua_apps = heap_caps_calloc(32, sizeof(lua_app_info_t), MALLOC_CAP_SPIRAM);
+    s_lua_count = s_lua_apps ? lua_apps_scan(s_lua_apps, 32) : 0;
+    for (int i = 0; i < s_lua_count; i++) {
+        lua_app_info_t *a = &s_lua_apps[i];
+        lv_obj_t *t = app_tile(c, a->name, a->icon, a->icon_is_image, a->color, lua_tile_cb, (void *)(intptr_t)i);
+        lv_obj_add_event_cb(t, lua_tile_long_cb, LV_EVENT_LONG_PRESSED, (void *)(intptr_t)i);
     }
 }
 

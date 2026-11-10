@@ -62,7 +62,7 @@
   <button data-t="dash" class="on">Dashboard</button><button data-t="screen">Screen</button>
   <button data-t="files">Files</button><button data-t="settings">Settings</button>
   <button data-t="alarms">Alarms</button><button data-t="notif">Notifications</button>
-  <button data-t="update">Updates</button><button data-t="dev">Developer</button>
+  <button data-t="update">Updates</button><button data-t="apps">Apps</button><button data-t="dev">Developer</button>
 </nav>
 <main>
 <!-- ============ dashboard ============ -->
@@ -141,6 +141,23 @@
     <p class="muted">Use <code>build/esp-watch-os.bin</code>. If the new firmware fails to start, the watch automatically goes back to the previous one.</p></div>
 </section>
 
+<!-- ============ apps ============ -->
+<section id="apps">
+  <div class="card"><h3>Installed apps <span class="muted">(Lua apps on the SD card, folder /apps)</span></h3>
+    <table id="atab"></table>
+    <div class="row" style="margin-top:10px"><button class="b p" onclick="newApp()">＋ New app</button>
+      <label class="b" style="cursor:pointer">⬆ Install app folder<input type="file" id="afolder" webkitdirectory multiple style="display:none" onchange="installFolder(this.files)"></label>
+      <button class="b" onclick="post('/api/apps/stop').then(loadApps)">■ Stop running app</button></div>
+    <p class="muted">An app is a folder with <code>main.lua</code> (+ optional <code>manifest.json</code>, <code>icon.png</code>). Long-press an app on the watch to uninstall it. API: docs/APPS.md in the repo.</p></div>
+  <div class="card" id="edcard" style="margin-top:12px;display:none"><h3>Editor: <span id="edname"></span></h3>
+    <div class="row"><select id="edfile" onchange="openFile(this.value)"></select>
+      <button class="b p" onclick="saveFile(true)">▶ Save &amp; run</button><button class="b" onclick="saveFile(false)">Save</button>
+      <button class="b" onclick="newFile()">New file</button><span class="muted">Ctrl+S = save &amp; run</span></div>
+    <textarea id="ed" spellcheck="false" style="width:100%;height:380px;font:13px/1.45 ui-monospace,Menlo,monospace;background:var(--bg);color:inherit;border:1px solid #333;border-radius:8px;padding:10px;tab-size:2;box-sizing:border-box"></textarea>
+    <h3 style="margin-top:10px">App output <span class="muted">(print() and errors)</span></h3>
+    <pre id="aout" style="white-space:pre-wrap;height:160px;overflow:auto;margin:0;font-size:12px;background:var(--bg);padding:8px;border-radius:8px"></pre></div>
+</section>
+
 <!-- ============ developer ============ -->
 <section id="dev">
   <div class="grid" id="devinfo"></div>
@@ -183,7 +200,7 @@ function dur(s) { const d = Math.floor(s / 86400), h = Math.floor(s / 3600) % 24
 $('nav').onclick = e => { const t = e.target.dataset.t; if (!t) return; tab = t;
   document.querySelectorAll('nav button').forEach(b => b.classList.toggle('on', b.dataset.t === t));
   document.querySelectorAll('section').forEach(s => s.classList.toggle('on', s.id === t));
-  ({ dash: refreshStatus, screen: shot, files: () => loadFiles(cwd), settings: loadSettings, alarms: loadAlarms, notif: loadNotifs, update: pollOta, dev: openDev })[t]();
+  ({ dash: refreshStatus, screen: shot, files: () => loadFiles(cwd), settings: loadSettings, alarms: loadAlarms, notif: loadNotifs, update: pollOta, apps: loadApps, dev: openDev })[t]();
 };
 
 /* ---------- dashboard ---------- */
@@ -403,6 +420,86 @@ async function runCmd() { const c = $('cin').value.trim(); if (!c) return;
   try { const r = await fetch('/api/console', { method: 'POST', body: c }); $('cout').textContent = '> ' + c + '\n' + await r.text() + '\n' + $('cout').textContent; $('cin').value = ''; }
   catch (e) { toast(e.message, true); } }
 function dlLog() { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([$('logbox').textContent], { type: 'text/plain' })); a.download = 'watch-log.txt'; a.click(); }
+
+/* ---------- apps ---------- */
+let edApp = null, edPath = null, appLogPos = 0, appTimer;
+const TEMPLATE = n => `-- ${n}: a starter app for ESP-Watch OS (API: docs/APPS.md)
+local count = storage.get("count", 0)
+
+ui.label("${n}", {font = 32, align = "top", y = 10})
+local label = ui.label("Taps: " .. count, {font = 48, align = "center", y = -30})
+
+ui.button("Tap me", function()
+  count = count + 1
+  label:text("Taps: " .. count)
+  storage.set("count", count)
+  watch.vibrate(30)
+end, {align = "bottom", y = -40})
+
+print("${n} started")
+`;
+async function loadApps() {
+  try { const d = await get('/api/apps'); const t = $('atab');
+    t.innerHTML = '<tr><th></th><th>App</th><th>Version</th><th>Memory</th><th></th></tr>';
+    if (!d.apps.length) { const r = t.insertRow(); r.innerHTML = '<td colspan="5" class="muted">No apps yet - click "New app".</td>'; }
+    for (const a of d.apps) { const r = t.insertRow();
+      r.innerHTML = '<td><span style="display:inline-block;width:14px;height:14px;border-radius:4px"></span></td><td><b></b><div class="muted"></div></td><td></td><td></td><td style="white-space:nowrap"></td>';
+      r.cells[0].firstChild.style.background = a.color; r.cells[1].children[0].textContent = a.name + (a.id === d.running ? '  ● running' : '');
+      r.cells[1].children[1].textContent = a.description || a.id; r.cells[2].textContent = a.version; r.cells[3].textContent = a.memory_kb + ' KB';
+      for (const [label, fn, cls] of [['▶ Run', () => runApp(a.id), 'p'], ['Edit', () => editApp(a.id, a.name), ''], ['Delete', () => delApp(a.id, a.name), 'd']]) {
+        const b = document.createElement('button'); b.className = 'b ' + cls; b.textContent = label; b.onclick = fn; b.style.marginLeft = '4px'; r.cells[4].appendChild(b); } }
+  } catch (e) { toast(e.message, true); }
+}
+async function runApp(id) { try { await post('/api/apps/run?id=' + enc(id)); toast('Started ' + id); loadApps(); } catch (e) { toast(e.message, true); } }
+async function delApp(id, name) { if (!confirm(`Uninstall "${name}"? Its folder and saved data are deleted.`)) return;
+  try { await post('/api/apps/delete?id=' + enc(id)); if (edApp === id) $('edcard').style.display = 'none'; loadApps(); } catch (e) { toast(e.message, true); } }
+async function putText(path, text) { await api('POST', '/api/upload?overwrite=1&path=' + enc(path), new Blob([text])); }
+async function mkdirs(path) { let p = ''; for (const part of path.split('/').filter(Boolean)) { p += '/' + part; await post('/api/mkdir?path=' + enc(p)).catch(() => {}); } }
+async function newApp() {
+  const id = (prompt('App folder name (letters, numbers, _ or -)', 'myapp') || '').trim();
+  if (!id) return; if (!/^[A-Za-z0-9_-]{1,30}$/.test(id)) return toast('Use letters, numbers, _ or - only', true);
+  const name = id.replace(/[_-]/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+  try { await mkdirs('/apps/' + id);
+    await putText(`/apps/${id}/manifest.json`, JSON.stringify({ name, icon: 'edit', color: '#5E5CE6', version: '1.0', description: 'My app', memory_kb: 512 }, null, 2));
+    await putText(`/apps/${id}/main.lua`, TEMPLATE(name));
+    await loadApps(); editApp(id, name); runApp(id);
+  } catch (e) { toast(e.message, true); }
+}
+async function installFolder(files) {
+  const list = [...files].filter(f => !f.name.startsWith('.') && f.name !== 'data.json'); if (!list.length) return;
+  const id = list[0].webkitRelativePath.split('/')[0];
+  if (!list.some(f => f.webkitRelativePath === id + '/main.lua')) return toast('That folder has no main.lua', true);
+  try { for (const f of list) { const rel = f.webkitRelativePath; const dir = rel.split('/').slice(0, -1).join('/');
+      await mkdirs('/apps/' + dir); await api('POST', '/api/upload?overwrite=1&path=' + enc('/apps/' + rel), f); }
+    toast(`Installed ${id} (${list.length} files)`); loadApps();
+  } catch (e) { toast(e.message, true); } $('afolder').value = '';
+}
+async function editApp(id, name) {
+  edApp = id; $('edname').textContent = name + ' (/apps/' + id + ')'; $('edcard').style.display = 'block';
+  try { const d = await get('/api/list?path=' + enc('/apps/' + id)); const sel = $('edfile'); sel.innerHTML = '';
+    const files = (d.items || d.entries || d).filter(e => !e.dir && /\.(lua|json|txt|md|csv)$/i.test(e.name)).map(e => e.name).sort((a, b) => (b === 'main.lua') - (a === 'main.lua'));
+    for (const f of files) sel.add(new Option(f, f)); openFile(files[0] || 'main.lua');
+  } catch (e) { toast(e.message, true); }
+  appLogPos = 0; $('aout').textContent = ''; appLogLoop(true); $('edcard').scrollIntoView({ behavior: 'smooth' });
+}
+async function openFile(f) { edPath = `/apps/${edApp}/${f}`; $('edfile').value = f;
+  try { const r = await fetch('/api/file?path=' + enc(edPath)); $('ed').value = r.ok ? await r.text() : ''; } catch (_) { $('ed').value = ''; } }
+async function saveFile(run) { if (!edPath) return;
+  try { await putText(edPath, $('ed').value); toast(run ? 'Saved - restarting app' : 'Saved'); if (run) await runApp(edApp); } catch (e) { toast(e.message, true); } }
+function newFile() { const f = (prompt('File name (e.g. utils.lua - load it with require("utils"))') || '').trim(); if (!f) return;
+  if (!/^[\w.-]+$/.test(f)) return toast('Bad file name', true); $('edfile').add(new Option(f, f)); edPath = `/apps/${edApp}/${f}`; $('edfile').value = f; $('ed').value = ''; }
+$('ed').addEventListener('keydown', e => {
+  if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); saveFile(true); }
+  if (e.key === 'Tab') { e.preventDefault(); const t = e.target, a = t.selectionStart; t.setRangeText('  ', a, t.selectionEnd, 'end'); } });
+async function appLogLoop(first) {
+  clearTimeout(appTimer); if (tab !== 'apps' || !edApp) return;
+  try { const r = await fetch('/api/logs?from=' + appLogPos); const txt = await r.text(); const pos = Number(r.headers.get('X-Log-Pos')) || appLogPos;
+    if (!first || appLogPos) { const lines = txt.split('\n').filter(l => l.includes('[' + edApp + ']') || l.includes('luaapp'));
+      if (lines.length) { const b = $('aout'); b.textContent = (b.textContent + lines.join('\n') + '\n').slice(-50000); b.scrollTop = b.scrollHeight; } }
+    appLogPos = pos;
+  } catch (_) {}
+  appTimer = setTimeout(appLogLoop, 1000);
+}
 
 refreshStatus(); setInterval(() => { if (tab === 'dash') refreshStatus(); }, 10000);
 </script>

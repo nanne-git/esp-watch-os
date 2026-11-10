@@ -1,0 +1,8 @@
+{
+  "name": "Counter",
+  "icon": "plus",
+  "color": "#30D158",
+  "version": "1.0",
+  "description": "Tap counter - the smallest useful app",
+  "memory_kb": 256
+}

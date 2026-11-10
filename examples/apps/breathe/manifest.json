@@ -1,0 +1,8 @@
+{
+  "name": "Breathe",
+  "icon": "loop",
+  "color": "#40C8E0",
+  "version": "1.0",
+  "description": "Guided breathing: 4 s in, 4 s hold, 6 s out",
+  "memory_kb": 256
+}

@@ -9,6 +9,7 @@
 
 #include "apps.h"
 #include "bsp/esp-bsp.h"
+#include "history.h"
 #include "hw.h"
 #include "phone.h"
 #include "settings.h"
@@ -34,18 +35,57 @@ static void act_refresh(void *ctx)
     lv_label_set_text(s_act_detail, b);
 }
 
+/* last 7 calendar days as bars (from history: flash + live count) */
+static void act_week_chart(lv_obj_t *c)
+{
+    history_day_t days[HISTORY_DAYS + 1];
+    int n = history_days(days, HISTORY_DAYS + 1);
+    lv_obj_t *chart = lv_chart_create(c);
+    lv_obj_set_size(chart, 340, 96);
+    lv_obj_align(chart, LV_ALIGN_TOP_MID, 0, 290);
+    lv_chart_set_type(chart, LV_CHART_TYPE_BAR);
+    lv_chart_set_point_count(chart, 7);
+    lv_chart_set_div_line_count(chart, 0, 0);
+    lv_obj_set_style_bg_opa(chart, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(chart, 0, 0);
+    lv_obj_set_style_pad_all(chart, 0, 0);
+    lv_obj_set_style_pad_column(chart, 14, 0);
+    lv_obj_set_style_radius(chart, 6, LV_PART_ITEMS);
+    lv_chart_series_t *ser = lv_chart_add_series(chart, lv_color_hex(UI_GREEN), LV_CHART_AXIS_PRIMARY_Y);
+    static const char *wd[] = { "S", "M", "T", "W", "T", "F", "S" };
+    uint32_t maxv = settings()->step_goal ? settings()->step_goal : 8000;
+    uint32_t vals[7];
+    time_t now = time(NULL);
+    for (int d = 0; d < 7; d++) {
+        time_t t = now - (6 - d) * 86400;
+        struct tm lt;
+        localtime_r(&t, &lt);
+        uint32_t date = (lt.tm_year + 1900) * 10000 + (lt.tm_mon + 1) * 100 + lt.tm_mday;
+        vals[d] = 0;
+        for (int i = 0; i < n; i++) {
+            if (days[i].date == date) vals[d] = days[i].steps;
+        }
+        if (vals[d] > maxv) maxv = vals[d];
+        lv_obj_t *l = ui_label(c, wd[lt.tm_wday], &lv_font_montserrat_14, d == 6 ? UI_TEXT : UI_MUTED);
+        lv_obj_align(l, LV_ALIGN_TOP_MID, -170 + 24 + d * 48, 392);
+    }
+    lv_chart_set_range(chart, LV_CHART_AXIS_PRIMARY_Y, 0, (int32_t)maxv);
+    for (int d = 0; d < 7; d++) lv_chart_set_value_by_id(chart, ser, d, (int32_t)vals[d]);
+    lv_chart_refresh(chart);
+}
+
 static void act_build(lv_obj_t *c, void *ctx)
 {
     lv_obj_t *arc = lv_arc_create(c);
     s_act_arc = arc;
-    lv_obj_set_size(arc, 280, 280);
-    lv_obj_align(arc, LV_ALIGN_TOP_MID, 0, 10);
+    lv_obj_set_size(arc, 236, 236);
+    lv_obj_align(arc, LV_ALIGN_TOP_MID, 0, 4);
     lv_arc_set_bg_angles(arc, 135, 45);
     lv_arc_set_range(arc, 0, 1000);
     lv_obj_remove_style(arc, NULL, LV_PART_KNOB);
     lv_obj_remove_flag(arc, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_set_style_arc_width(arc, 22, LV_PART_MAIN);
-    lv_obj_set_style_arc_width(arc, 22, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_width(arc, 20, LV_PART_MAIN);
+    lv_obj_set_style_arc_width(arc, 20, LV_PART_INDICATOR);
     lv_obj_set_style_arc_color(arc, lv_color_hex(0x1E3A26), LV_PART_MAIN);
     lv_obj_set_style_arc_color(arc, lv_color_hex(UI_GREEN), LV_PART_INDICATOR);
     s_act_steps = ui_label(arc, "0", &lv_font_montserrat_48, UI_TEXT);
@@ -53,11 +93,12 @@ static void act_build(lv_obj_t *c, void *ctx)
     lv_obj_t *l = ui_label(arc, "steps today", &lv_font_montserrat_18, UI_MUTED);
     lv_obj_align(l, LV_ALIGN_CENTER, 0, 36);
     s_act_detail = ui_label(c, "", &lv_font_montserrat_16, UI_MUTED);
-    lv_obj_align(s_act_detail, LV_ALIGN_TOP_MID, 0, 310);
+    lv_obj_align(s_act_detail, LV_ALIGN_TOP_MID, 0, 250);
     if (!imu_ok()) {
         lv_obj_t *w = ui_label(c, "Motion sensor not found", &lv_font_montserrat_16, UI_RED);
-        lv_obj_align(w, LV_ALIGN_TOP_MID, 0, 340);
+        lv_obj_align(w, LV_ALIGN_TOP_MID, 0, 270);
     }
+    act_week_chart(c);
     act_refresh(NULL);
     ui_page_set_refresh(act_refresh);
 }

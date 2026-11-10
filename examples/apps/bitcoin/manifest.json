@@ -1,0 +1,8 @@
+{
+  "name": "Bitcoin",
+  "icon": "refresh",
+  "color": "#F7931A",
+  "version": "1.0",
+  "description": "Live BTC price over Wi-Fi (http + json example)",
+  "memory_kb": 512
+}

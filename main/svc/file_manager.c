@@ -34,6 +34,7 @@
 #include "esp_heap_caps.h"
 #include "hw.h"
 #include "mbedtls/base64.h"
+#include "lua_apps.h"
 #include "phone.h"
 #include "settings.h"
 #include "timesvc.h"
@@ -291,6 +292,7 @@ static void cmd_help(void)
     reply("cp <src> <dst> | mv <src> <dst>  (mv also renames)");
     reply("info | df | mount | unmount | ping | uptime");
     reply("web  -> address of the browser file manager");
+    reply("apps | app run <id> | app stop | app rm <id>   (Lua apps in /apps)");
 }
 
 static void cmd_ls(const char *arg)
@@ -658,6 +660,59 @@ static void cmd_set(const char *key, const char *value)
     reply(n ? "ok" : "unknown setting");
 }
 
+/* putb <w|a> <card-path> <base64>: write (w) or append (a) a chunk of a binary file.
+ * Creates missing folders. Used by `watchctl.py app push` to install apps over USB. */
+static void mkdirs_for(const char *abs_file)
+{
+    char tmp[FM_MAX_PATH];
+    strlcpy(tmp, abs_file, sizeof(tmp));
+    for (char *p = tmp + strlen(MOUNT_POINT) + 1; *p; p++) {
+        if (*p == '/') {
+            *p = '\0';
+            mkdir(tmp, 0775);
+            *p = '/';
+        }
+    }
+}
+
+static void cmd_putb(const char *mode, const char *text)
+{
+    if (!s_card) { reply("ERR no SD card"); return; }
+    const char *sp = text ? strchr(text, ' ') : NULL;
+    if (!mode || !sp || (mode[0] != 'w' && mode[0] != 'a')) { reply("ERR usage: putb <w|a> <path> <base64>"); return; }
+    char card[FM_MAX_PATH], abs[FM_MAX_PATH];
+    size_t plen = (size_t)(sp - text);
+    if (plen >= sizeof(card)) { reply("ERR path too long"); return; }
+    memcpy(card, text, plen);
+    card[plen] = '\0';
+    if (!fm_card_path(card, abs, sizeof(abs))) { reply("ERR bad path"); return; }
+    unsigned char bin[192];
+    size_t n = 0;
+    if (mbedtls_base64_decode(bin, sizeof(bin), &n, (const unsigned char *)sp + 1, strlen(sp + 1)) != 0) {
+        reply("ERR bad base64");
+        return;
+    }
+    mkdirs_for(abs);
+    FILE *f = fopen(abs, mode[0] == 'w' ? "wb" : "ab");
+    if (!f) { reply("ERR cannot open %s", card); return; }
+    bool ok = fwrite(bin, 1, n, f) == n;
+    fclose(f);
+    reply(ok ? "OK %u" : "ERR write failed", (unsigned)n);
+}
+
+static void cmd_apps(void)
+{
+    lua_app_info_t *list = calloc(32, sizeof(*list));
+    int n = list ? lua_apps_scan(list, 32) : 0;
+    char running[32] = "";
+    lua_apps_running(running, sizeof(running));
+    if (!n) reply("no apps installed (put them in /apps/<name>/main.lua on the SD card)");
+    for (int i = 0; i < n; i++) {
+        reply("%s%-16s %-20s v%s", strcmp(running, list[i].id) == 0 ? "* " : "  ", list[i].id, list[i].name, list[i].version);
+    }
+    free(list);
+}
+
 static bool device_command(const char *cmd, char *a1, char *a2, char *text, char *line_rest)
 {
     if (strcmp(cmd, "shot") == 0) { cmd_shot(); return true; }
@@ -689,6 +744,15 @@ static bool device_command(const char *cmd, char *a1, char *a2, char *text, char
         return true;
     }
     if (strcmp(cmd, "restart") == 0) { power_restart(); return true; }
+    if (strcmp(cmd, "putb") == 0) { cmd_putb(a1, text); return true; }
+    if (strcmp(cmd, "apps") == 0) { cmd_apps(); return true; }
+    if (strcmp(cmd, "app") == 0 && a1) {
+        if (strcmp(a1, "run") == 0 && a2) reply(lua_apps_run(a2) ? "running %s" : "no app '%s' (needs /apps/%s/main.lua)", a2, a2);
+        else if (strcmp(a1, "stop") == 0) { lua_apps_stop(); reply("ok"); }
+        else if (strcmp(a1, "rm") == 0 && a2) reply(lua_apps_remove(a2) ? "removed %s" : "could not remove %s", a2);
+        else reply("usage: app run <id> | app stop | app rm <id>");
+        return true;
+    }
     return false;
 }
 

@@ -176,6 +176,7 @@ static imu_wake_cb_t  s_raise_cb;
 bool imu_ok(void) { return s_imu_ok; }
 uint32_t imu_steps_today(void) { return s_steps; }
 void imu_reset_steps(void) { s_steps = 0; }
+void imu_add_steps(uint32_t n) { s_steps += n; }
 void imu_set_raise_cb(imu_wake_cb_t cb) { s_raise_cb = cb; }
 
 /*
