@@ -256,7 +256,7 @@ static void face_rebuild(lv_obj_t *scr, int face, bool aod)
     for (uint32_t i = 0; i < lv_obj_get_child_count(r); i++) {
         lv_obj_add_flag(lv_obj_get_child(r, i), LV_OBJ_FLAG_EVENT_BUBBLE | LV_OBJ_FLAG_GESTURE_BUBBLE);
         lv_obj_remove_flag(lv_obj_get_child(r, i), LV_OBJ_FLAG_CLICKABLE);
-    }
+    }    lv_obj_invalidate(scr);     /* normal <-> always-on: repaint every pixel */
 }
 
 static void set_needle(lv_obj_t *line, lv_point_precise_t *pts, float angle_deg, int len, int tail)

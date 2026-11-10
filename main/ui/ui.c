@@ -192,25 +192,39 @@ void ui_page_pop(void)
     }
 }
 
-void ui_go_home(void)
+/*
+ * Close every page and show the watch face.
+ * The page on screen must be the LAST thing removed: deleting the active screen first
+ * (the old code did that when 2+ pages were open) leaves LVGL without a valid screen,
+ * so it only repaints the clock digits and the old page's pixels stay on the panel.
+ */
+static void go_home(bool animate)
 {
     if (s_depth == 0) {
         return;
     }
+    lv_obj_t *top = s_pages[s_depth - 1].scr;
     while (s_depth > 0) {
         page_t *p = &s_pages[--s_depth];
         if (p->on_close) {
             p->on_close(p->ctx);
         }
-        if (s_depth > 0) {           /* intermediate pages: delete directly */
-            lv_obj_delete(p->scr);
-        } else {
-            lv_screen_load_anim(s_home, LV_SCREEN_LOAD_ANIM_MOVE_RIGHT, 180, 0, true);
+        if (p->scr != top) {
+            lv_obj_delete(p->scr);   /* hidden pages underneath: delete directly */
         }
         p->scr = NULL;
     }
+    if (animate) {
+        lv_screen_load_anim(s_home, LV_SCREEN_LOAD_ANIM_MOVE_RIGHT, 180, 0, true);  /* deletes top */
+    } else {
+        lv_screen_load(s_home);
+        lv_obj_delete(top);
+    }
+    lv_obj_invalidate(s_home);       /* repaint the whole panel, not just what changed */
     ui_home_refresh();
 }
+
+void ui_go_home(void) { go_home(true); }
 
 /* ======================================================================== sleep / wake */
 
@@ -248,11 +262,12 @@ static void do_sleep(void)
         return;
     }
     s_awake = false;
-    ui_go_home();
+    go_home(false);            /* instant switch: no slide animation into a dark screen */
     cpu_fast(false);           /* screen off: let the CPU drop to 80 MHz */
     if (settings()->always_on) {
         s_dimmed_aod = true;
         ui_home_refresh();
+        lv_obj_invalidate(s_home);
         bsp_display_brightness_set(6);
     } else {
         bsp_display_brightness_set(0);
