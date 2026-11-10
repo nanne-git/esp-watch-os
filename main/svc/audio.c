@@ -130,6 +130,8 @@ static esp_err_t pl_mute(AUDIO_PLAYER_MUTE_SETTING setting)
     return ESP_OK;
 }
 
+static void unload_later(bool on);
+
 static void pl_event(audio_player_cb_ctx_t *ctx)
 {
     switch (ctx->audio_event) {
@@ -146,6 +148,7 @@ static void pl_event(audio_player_cb_ctx_t *ctx)
         bool finished_by_itself = s_pstate != PLAYER_IDLE && !s_user_stop;
         s_pstate = PLAYER_IDLE;
         spk_close();
+        unload_later(true);
         if (finished_by_itself && s_done_cb) {
             s_done_cb();              /* let the app play the next track */
         }
@@ -158,6 +161,41 @@ static void pl_event(audio_player_cb_ctx_t *ctx)
         break;
     default:
         break;
+    }
+}
+
+/* The player (its 4 KB task, buffers and the MP3 decoder's many small internal-RAM
+ * allocations, ~20 KB internal in total) is only kept loaded while music is used: 20 s
+ * after it goes idle it is unloaded, and loaded again on the next play. */
+#define PLAYER_UNLOAD_S 20
+static esp_timer_handle_t s_unload_timer;
+static volatile bool      s_unload_req;
+static TaskHandle_t       s_beep_task;
+
+static void unload_timer_cb(void *arg)
+{
+    s_unload_req = true;
+    if (s_beep_task) xTaskNotifyGive(s_beep_task);      /* beep_task does the (slow) unload */
+}
+
+static void unload_later(bool on)
+{
+    if (!s_unload_timer) {
+        const esp_timer_create_args_t a = { .callback = unload_timer_cb, .name = "pl_unload" };
+        esp_timer_create(&a, &s_unload_timer);
+    }
+    esp_timer_stop(s_unload_timer);
+    if (on) esp_timer_start_once(s_unload_timer, PLAYER_UNLOAD_S * 1000000ULL);
+}
+
+static void player_unload_now(void)
+{
+    if (s_player_ready && s_pstate == PLAYER_IDLE) {
+        audio_player_delete();
+        s_player_ready = false;
+        s_want_rate = 0;
+        spk_close();
+        ESP_LOGI(TAG, "player unloaded (idle)");
     }
 }
 
@@ -268,6 +306,7 @@ bool player_play(const char *path)
         rec_stop();
     }
     audio_beep_stop();
+    unload_later(false);
     if (!player_ensure()) {
         return false;
     }
@@ -340,14 +379,17 @@ int player_elapsed_s(void)
 
 static volatile int s_beep_freq, s_beep_ms;
 static volatile bool s_beep_stop;
-static TaskHandle_t s_beep_task;
-
 static void beep_task(void *arg)
 {
     const int rate = 16000;
     int16_t *buf = malloc(256 * sizeof(int16_t));
     while (true) {
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        if (s_unload_req) {
+            s_unload_req = false;
+            player_unload_now();
+            continue;
+        }
         if (s_pstate == PLAYER_PAUSED) {
             player_stop();          /* a forgotten paused song must not silence the alarm */
             vTaskDelay(pdMS_TO_TICKS(100));

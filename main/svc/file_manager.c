@@ -794,6 +794,11 @@ static bool device_command(const char *cmd, char *a1, char *a2, char *text, char
     if (strcmp(cmd, "apps") == 0) { cmd_apps(); return true; }
     if (strcmp(cmd, "tasks") == 0) { cmd_tasks(); return true; }
     if (strcmp(cmd, "top") == 0) { cmd_top(); return true; }
+    if (strcmp(cmd, "bench") == 0) {
+        if (a1 && strcmp(a1, "blank") == 0) reply("blank redraw: %.1f ms", ui_bench_blank(10));
+        else reply("full-screen redraw: %.1f ms", ui_bench(10));
+        return true;
+    }
     if (strcmp(cmd, "hex") == 0 && a1 && text) {         /* hex <offset> <card path>: 32 bytes */
         const char *path = text;          /* text = everything after the offset */
         char abs[FM_MAX_PATH];

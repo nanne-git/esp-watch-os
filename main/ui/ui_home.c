@@ -19,6 +19,7 @@
 #include "settings.h"
 #include "timesvc.h"
 #include "ui.h"
+#include "display.h"
 #include "weather.h"
 #include "wifi_svc.h"
 
@@ -81,6 +82,7 @@ static void set_txt(lv_obj_t *l, const char *t)
 
 typedef struct {
     lv_obj_t *root;
+    lv_draw_buf_t *dial;     /* analog dial picture (PSRAM) */
     lv_obj_t *status, *date, *time, *ampm, *hint;
     lv_obj_t *c_steps_arc, *c_steps_lbl, *c_notif_lbl, *c_bat_arc, *c_bat_lbl, *c_extra_lbl;
     lv_obj_t *scale;
@@ -122,17 +124,19 @@ static lv_obj_t *complication(lv_obj_t *parent, uint32_t color, const char *icon
     return c;
 }
 
+LV_FONT_DECLARE(font_clock_112);
+LV_FONT_DECLARE(font_clock_144);
+
 static void build_digital(lv_obj_t *r, bool aod)
 {
     s_face.status = ui_label(r, "", &lv_font_montserrat_18, UI_MUTED);
     lv_obj_align(s_face.status, LV_ALIGN_TOP_MID, 0, 22);
     s_face.date = ui_label(r, "", &lv_font_montserrat_24, aod ? 0x707070 : UI_MUTED);
     lv_obj_align(s_face.date, LV_ALIGN_TOP_MID, 0, aod ? 120 : 76);
-    s_face.time = ui_label(r, "", &lv_font_montserrat_48, aod ? 0x9A9A9A : UI_TEXT);
-    lv_obj_set_style_transform_scale(s_face.time, aod ? 512 : 580, 0);
-    lv_obj_set_style_transform_pivot_x(s_face.time, lv_pct(50), 0);
-    lv_obj_set_style_transform_pivot_y(s_face.time, lv_pct(50), 0);
-    lv_obj_align(s_face.time, LV_ALIGN_TOP_MID, 0, aod ? 200 : 152);
+    /* a real 112 px font: scaling a 48 px label up (transform) made every redraw of the
+     * time render into an extra layer and resample it - the most expensive thing on screen */
+    s_face.time = ui_label(r, "", &font_clock_112, aod ? 0x9A9A9A : UI_TEXT);
+    lv_obj_align(s_face.time, LV_ALIGN_TOP_MID, 0, aod ? 160 : 112);
     s_face.ampm = ui_label(r, "", &lv_font_montserrat_20, aod ? 0x606060 : 0);
     lv_obj_set_style_text_color(s_face.ampm, aod ? lv_color_hex(0x606060) : ui_accent(), 0);
     lv_obj_align(s_face.ampm, LV_ALIGN_TOP_MID, 0, aod ? 290 : 240);
@@ -182,6 +186,24 @@ static void build_analog(lv_obj_t *r, bool aod)
     lv_obj_set_style_line_color(sc, lv_color_hex(aod ? 0x707070 : UI_TEXT), LV_PART_INDICATOR);
     lv_obj_set_style_pad_all(sc, 8, 0);
 
+    /* The dial (61 ticks + 12 numbers) never changes but was re-drawn for every frame that
+     * touched it (each second-hand tick). Draw it ONCE into a picture and show that behind
+     * the hands; the scale object stays only as the hands' container and draws nothing. */
+    lv_obj_update_layout(sc);
+    lv_draw_buf_t *dial = lv_snapshot_take(sc, LV_COLOR_FORMAT_RGB565);
+    if (dial) {
+        s_face.dial = dial;
+        lv_obj_t *img = lv_image_create(r);
+        lv_image_set_src(img, dial);
+        lv_obj_align(img, LV_ALIGN_CENTER, 0, aod ? 0 : -20);
+        lv_obj_move_background(img);
+        lv_obj_remove_flag(img, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_flag(img, LV_OBJ_FLAG_EVENT_BUBBLE | LV_OBJ_FLAG_GESTURE_BUBBLE);
+        lv_scale_set_total_tick_count(sc, 0);
+        lv_scale_set_label_show(sc, false);
+        lv_obj_set_style_bg_opa(sc, LV_OPA_TRANSP, 0);
+    }
+
     s_face.needle_h = lv_line_create(sc);
     lv_obj_set_style_line_width(s_face.needle_h, 9, 0);
     lv_obj_set_style_line_rounded(s_face.needle_h, true, 0);
@@ -213,16 +235,10 @@ static void build_analog(lv_obj_t *r, bool aod)
 
 static void build_minimal(lv_obj_t *r, bool aod)
 {
-    s_face.hour_big = ui_label(r, "", &lv_font_montserrat_48, 0);
+    s_face.hour_big = ui_label(r, "", &font_clock_144, 0);
     lv_obj_set_style_text_color(s_face.hour_big, aod ? lv_color_hex(0x8A8A8A) : ui_accent(), 0);
-    lv_obj_set_style_transform_scale(s_face.hour_big, 760, 0);
-    lv_obj_set_style_transform_pivot_x(s_face.hour_big, lv_pct(50), 0);
-    lv_obj_set_style_transform_pivot_y(s_face.hour_big, lv_pct(50), 0);
     lv_obj_align(s_face.hour_big, LV_ALIGN_CENTER, 0, -90);
-    s_face.min_big = ui_label(r, "", &lv_font_montserrat_48, aod ? 0x6A6A6A : UI_TEXT);
-    lv_obj_set_style_transform_scale(s_face.min_big, 760, 0);
-    lv_obj_set_style_transform_pivot_x(s_face.min_big, lv_pct(50), 0);
-    lv_obj_set_style_transform_pivot_y(s_face.min_big, lv_pct(50), 0);
+    s_face.min_big = ui_label(r, "", &font_clock_144, aod ? 0x6A6A6A : UI_TEXT);
     lv_obj_align(s_face.min_big, LV_ALIGN_CENTER, 0, 70);
     s_face.date = ui_label(r, "", &lv_font_montserrat_20, UI_MUTED);
     lv_obj_align(s_face.date, LV_ALIGN_BOTTOM_MID, 0, -40);
@@ -236,6 +252,9 @@ static void face_rebuild(lv_obj_t *scr, int face, bool aod)
 {
     if (s_face.root) {
         lv_obj_delete(s_face.root);
+    }
+    if (s_face.dial) {
+        lv_draw_buf_destroy(s_face.dial);   /* the image using it was deleted with root */
     }
     memset(&s_face, 0, sizeof(s_face));
     s_face.face = face;
@@ -437,11 +456,10 @@ static lv_obj_t *app_tile(lv_obj_t *c, const char *name, const char *icon, bool 
     lv_obj_set_size(ic, 80, 80);
     lv_obj_align(ic, LV_ALIGN_TOP_MID, 0, 0);
     lv_obj_set_style_radius(ic, 24, 0);
-    lv_obj_set_style_clip_corner(ic, true, 0);
+    if (icon_img) lv_obj_set_style_clip_corner(ic, true, 0);   /* only pictures need clipping */
     lv_obj_set_style_bg_opa(ic, LV_OPA_COVER, 0);
     lv_obj_set_style_bg_color(ic, lv_color_hex(color), 0);
-    lv_obj_set_style_bg_grad_color(ic, lv_color_darken(lv_color_hex(color), 60), 0);
-    lv_obj_set_style_bg_grad_dir(ic, LV_GRAD_DIR_VER, 0);
+    /* flat colour: a gradient costs extra work per pixel on every redraw of the list */
     lv_obj_remove_flag(ic, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_flag(ic, LV_OBJ_FLAG_EVENT_BUBBLE);
     if (icon_img) {
@@ -540,7 +558,7 @@ static void qs_bright_cb(lv_event_t *e)
 {
     int v = lv_slider_get_value(lv_event_get_target(e));
     if (lv_event_get_code(e) == LV_EVENT_VALUE_CHANGED) {
-        bsp_display_brightness_set(v);
+        display_brightness_set(v);
     }
 }
 

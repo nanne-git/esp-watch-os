@@ -29,6 +29,7 @@
 #include "settings.h"
 #include "timesvc.h"
 #include "ui.h"
+#include "display.h"
 #include "weather.h"
 #include "wifi_svc.h"
 
@@ -347,7 +348,7 @@ static void accent_click(lv_event_t *e)
 
 static void bright_change(lv_event_t *e)
 {
-    bsp_display_brightness_set(lv_slider_get_value(lv_event_get_target(e)));
+    display_brightness_set(lv_slider_get_value(lv_event_get_target(e)));
 }
 
 static void bright_release(lv_event_t *e)

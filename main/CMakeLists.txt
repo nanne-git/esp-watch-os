@@ -1,4 +1,4 @@
-idf_component_register(SRC_DIRS "." "svc" "hw" "ui" "apps"
+idf_component_register(SRC_DIRS "." "svc" "hw" "ui" "ui/fonts" "apps"
                        INCLUDE_DIRS "." "svc" "hw" "ui" "apps"
                        EMBED_FILES "www/index.html")
 # snprintf into fixed label buffers truncates on purpose

@@ -14,6 +14,7 @@
 #include "phone.h"
 #include "settings.h"
 #include "ui.h"
+#include "display.h"
 #include "weather.h"
 
 /* ======================================================================== activity */
@@ -171,7 +172,7 @@ static lv_obj_t *s_fl_scr;
 static void fl_close_click(lv_event_t *e)
 {
     ui_keep_awake(false);
-    bsp_display_brightness_set(settings()->brightness);
+    display_brightness_set(settings()->brightness);
     lv_obj_delete(s_fl_scr);
     s_fl_scr = NULL;
 }
@@ -188,7 +189,7 @@ void app_flashlight_open(void)
     lv_obj_add_event_cb(s_fl_scr, fl_close_click, LV_EVENT_CLICKED, NULL);
     lv_obj_t *l = ui_label(s_fl_scr, "Tap to turn off", &lv_font_montserrat_16, 0x8E8E93);
     lv_obj_align(l, LV_ALIGN_BOTTOM_MID, 0, -20);
-    bsp_display_brightness_set(100);
+    display_brightness_set(100);
     ui_keep_awake(true);
 }
 

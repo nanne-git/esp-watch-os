@@ -76,6 +76,8 @@ void ui_inject_long_press(int x, int y);
 void ui_inject_swipe(int x1, int y1, int x2, int y2);
 void ui_inject_key(const char *key);           /* "back", "home", "power", "wake" */
 uint8_t *ui_screenshot_bmp(size_t *out_len);   /* malloc'd BMP, caller frees */
+float ui_bench(int n);                         /* avg ms to redraw the full screen */
+float ui_bench_blank(int n);                   /* same on an empty black screen (overhead) */
 
 /* ---- widget helpers (LVGL context) ---- */
 lv_obj_t *ui_label(lv_obj_t *parent, const char *text, const lv_font_t *font, uint32_t color);

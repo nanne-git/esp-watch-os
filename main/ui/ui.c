@@ -1,4 +1,5 @@
 #include "ui.h"
+#include "display.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -17,6 +18,11 @@
 static const char *TAG = "ui";
 
 #define PAGE_MAX 10
+/* page changes: a slide redraws two full screens per frame; at ~60-100 ms per full frame it
+ * only managed 2-3 frames and looked jerky, so switch instantly instead */
+#define PAGE_ANIM_IN  LV_SCREEN_LOAD_ANIM_NONE
+#define PAGE_ANIM_OUT LV_SCREEN_LOAD_ANIM_NONE
+#define PAGE_ANIM_MS  0
 
 typedef struct {
     lv_obj_t   *scr;
@@ -163,7 +169,7 @@ static lv_obj_t *push(const char *title, page_build_t build, page_fn_t on_close,
     strlcpy(p->title, title ? title : "", sizeof(p->title));
     lv_obj_add_event_cb(p->scr, page_gesture_cb, LV_EVENT_GESTURE, NULL);
     build_page(p);
-    lv_screen_load_anim(p->scr, LV_SCREEN_LOAD_ANIM_MOVE_LEFT, 180, 0, false);
+    lv_screen_load_anim(p->scr, PAGE_ANIM_IN, PAGE_ANIM_MS, 0, false);
     return p->content;
 }
 
@@ -196,7 +202,11 @@ void ui_page_pop(void)
         p->on_close(p->ctx);
     }
     lv_obj_t *prev = s_depth > 0 ? s_pages[s_depth - 1].scr : s_home;
-    lv_screen_load_anim(prev, LV_SCREEN_LOAD_ANIM_MOVE_RIGHT, 180, 0, true);   /* deletes p->scr */
+    /* Load the previous screen and delete this one AFTER the current event: pop is often
+     * called from this screen's own back-swipe/back-button event, and deleting the screen
+     * inside its own event made LVGL touch freed memory (crash). */
+    lv_screen_load(prev);
+    lv_obj_delete_async(p->scr);
     p->scr = NULL;
     if (s_depth > 0 && s_pages[s_depth - 1].refresh) {
         s_pages[s_depth - 1].refresh(s_pages[s_depth - 1].ctx);
@@ -223,15 +233,16 @@ static void go_home(bool animate)
             p->on_close(p->ctx);
         }
         if (p->scr != top) {
-            lv_obj_delete(p->scr);   /* hidden pages underneath: delete directly */
+            lv_obj_delete_async(p->scr);   /* hidden pages underneath */
         }
         p->scr = NULL;
     }
     if (animate) {
-        lv_screen_load_anim(s_home, LV_SCREEN_LOAD_ANIM_MOVE_RIGHT, 180, 0, true);  /* deletes top */
+        lv_screen_load(s_home);
+        lv_obj_delete_async(top);        /* not inside its own event (see ui_page_pop) */
     } else {
         lv_screen_load(s_home);
-        lv_obj_delete(top);
+        lv_obj_delete_async(top);
     }
     lv_obj_invalidate(s_home);       /* repaint the whole panel, not just what changed */
     ui_home_refresh();
@@ -248,7 +259,7 @@ static void apply_brightness(void)
     if (s->power_save && b > 50) {
         b = 50;
     }
-    bsp_display_brightness_set(b);
+    display_brightness_set(b);
 }
 
 bool ui_is_awake(void) { return s_awake; }
@@ -313,9 +324,9 @@ static void do_sleep(void)
         s_dimmed_aod = true;
         ui_home_refresh();
         lv_obj_invalidate(s_home);
-        bsp_display_brightness_set(6);
+        display_brightness_set(6);
     } else {
-        bsp_display_brightness_set(0);
+        display_brightness_set(0);
     }
 }
 
@@ -671,8 +682,8 @@ void ui_on_alarm(const char *label)
     struct tm lt;
     localtime_r(&now, &lt);
     snprintf(tbuf, sizeof(tbuf), "%02d:%02d", lt.tm_hour, lt.tm_min);
-    l = ui_label(o, tbuf, &lv_font_montserrat_48, UI_TEXT);
-    lv_obj_set_style_transform_scale(l, 400, 0);
+    LV_FONT_DECLARE(font_clock_112);
+    l = ui_label(o, tbuf, &font_clock_112, UI_TEXT);
     lv_obj_align(l, LV_ALIGN_CENTER, 0, -50);
     l = ui_label(o, label && *label ? label : "Alarm", &lv_font_montserrat_24, UI_MUTED);
     lv_obj_align(l, LV_ALIGN_CENTER, 0, 30);
@@ -793,6 +804,42 @@ void ui_inject_key(const char *key)
         ui_open_recents();
     }
     ui_unlock();
+}
+
+/* ======================================================================== benchmark */
+
+/* redraw the whole current screen n times; returns average ms per frame (render + send) */
+float ui_bench_blank(int n)
+{
+    if (!ui_lock()) return -1;
+    lv_obj_t *old = lv_screen_active();
+    lv_obj_t *b = lv_obj_create(NULL);
+    lv_obj_set_style_bg_color(b, lv_color_black(), 0);
+    lv_screen_load(b);
+    ui_unlock();
+    float r = ui_bench(n);
+    if (ui_lock()) {
+        lv_screen_load(old);
+        lv_obj_delete(b);
+        ui_unlock();
+    }
+    return r;
+}
+
+float ui_bench(int n)
+{
+    if (n < 1) n = 1;
+    if (!ui_lock()) return -1;
+    cpu_busy();
+    int64_t total = 0;
+    for (int i = 0; i < n; i++) {
+        lv_obj_invalidate(lv_screen_active());
+        int64_t t0 = esp_timer_get_time();
+        lv_refr_now(NULL);
+        total += esp_timer_get_time() - t0;
+    }
+    ui_unlock();
+    return total / 1000.0f / n;
 }
 
 /* ======================================================================== screenshot */
