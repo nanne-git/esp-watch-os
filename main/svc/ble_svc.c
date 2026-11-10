@@ -7,6 +7,7 @@
 #include "esp_timer.h"
 #include "file_manager.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
 #include "freertos/task.h"
 #include "host/ble_hs.h"
 #include "host/util/util.h"
@@ -22,7 +23,11 @@ static const char *TAG = "ble";
 
 #define PREFERRED_MTU       247
 #define ADV_RESUME_DELAY_US (15 * 1000 * 1000)
-#define RX_LINE_MAX            1536
+#define RX_LINE_MAX         4096      /* GB notifications with long bodies can be big */
+#define RX_WRITE_MAX        512       /* largest single GATT write we accept */
+#define TX_QUEUE_LEN        24
+#define TX_LINE_MAX         2048
+#define TX_RETRY_MS         5000      /* keep retrying a busy link this long before giving up */
 
 /* Nordic UART Service 6E400001-B5A3-F393-E0A9-E50E24DCCA9E (little-endian bytes) */
 static const ble_uuid128_t nus_svc_uuid = BLE_UUID128_INIT(
@@ -44,14 +49,24 @@ static esp_timer_handle_t s_resume_timer;
 
 static char   s_line[RX_LINE_MAX];
 static size_t s_line_len;
+static bool   s_line_overflow;
+
+typedef struct {
+    char  *buf;
+    size_t len;
+} tx_msg_t;
+static QueueHandle_t s_tx_queue;
+static volatile bool s_tx_partial;      /* last line was cut off mid-way: terminate it first */
 
 static void advertise(void);
 
 /* ------------------------------------------------------------------ send */
 
-bool ble_svc_send(const void *data, size_t len)
+/* Gadgetbridge splits incoming data at "\n" and throws away the character in front of it,
+ * because Espruino ends lines with "\r\n". So every line we send must end in "\r\n",
+ * otherwise a JSON line loses its closing '}' -> "Malformed JSON from Bangle.js". */
+static bool tx_raw(const uint8_t *p, size_t len)
 {
-    const uint8_t *p = data;
     while (len > 0) {
         if (s_conn == BLE_HS_CONN_HANDLE_NONE || !s_subscribed) {
             return false;
@@ -62,18 +77,86 @@ bool ble_svc_send(const void *data, size_t len)
             chunk = mtu - 3;
         }
         int rc = BLE_HS_ENOMEM;
-        for (int i = 0; i < 100 && rc == BLE_HS_ENOMEM; i++) {
+        for (int waited = 0; waited < TX_RETRY_MS; waited += 10) {
             struct os_mbuf *om = ble_hs_mbuf_from_flat(p, chunk);
             rc = om ? ble_gatts_notify_custom(s_conn, s_tx_handle, om) : BLE_HS_ENOMEM;
-            if (rc == BLE_HS_ENOMEM) {
-                vTaskDelay(pdMS_TO_TICKS(10));
+            if (rc != BLE_HS_ENOMEM && rc != BLE_HS_EBUSY) {
+                break;
             }
+            if (s_conn == BLE_HS_CONN_HANDLE_NONE) {
+                return false;
+            }
+            vTaskDelay(pdMS_TO_TICKS(10));
         }
         if (rc != 0) {
             return false;
         }
         p += chunk;
         len -= chunk;
+    }
+    return true;
+}
+
+static void tx_task(void *arg)
+{
+    tx_msg_t m;
+    while (true) {
+        if (xQueueReceive(s_tx_queue, &m, portMAX_DELAY) != pdTRUE) {
+            continue;
+        }
+        if (s_conn != BLE_HS_CONN_HANDLE_NONE && s_subscribed) {
+            if (s_tx_partial) {
+                /* a previous line was cut off: end it so it can't swallow this one */
+                if (tx_raw((const uint8_t *)"\r\n", 2)) {
+                    s_tx_partial = false;
+                }
+            }
+            if (!tx_raw((const uint8_t *)m.buf, m.len)) {
+                ESP_LOGW(TAG, "TX failed, line dropped");
+                s_tx_partial = true;
+            }
+        }
+        free(m.buf);
+    }
+}
+
+bool ble_svc_send(const void *data, size_t len)
+{
+    if (!s_tx_queue || s_conn == BLE_HS_CONN_HANDLE_NONE || !s_subscribed) {
+        return false;
+    }
+    const char *in = data;
+    /* strip whatever line ending the caller used; we add "\r\n" ourselves */
+    while (len > 0 && (in[len - 1] == '\n' || in[len - 1] == '\r')) {
+        len--;
+    }
+    if (len > TX_LINE_MAX) {
+        len = TX_LINE_MAX;
+    }
+    /* worst case every byte is a '\n' that becomes "\r\n", plus the final "\r\n" */
+    char *out = malloc(len * 2 + 2);
+    if (!out) {
+        return false;
+    }
+    size_t o = 0;
+    for (size_t i = 0; i < len; i++) {
+        char c = in[i];
+        if (c == '\r') {
+            continue;                       /* re-added before each '\n' below */
+        }
+        if (c == '\n') {
+            out[o++] = '\r';
+        }
+        out[o++] = c;
+    }
+    out[o++] = '\r';
+    out[o++] = '\n';
+    ESP_LOGD(TAG, "tx> %.*s", (int)(o > 2 ? o - 2 : 0), out);     /* debug: what the phone gets */
+    tx_msg_t m = { .buf = out, .len = o };
+    if (xQueueSend(s_tx_queue, &m, pdMS_TO_TICKS(50)) != pdTRUE) {
+        free(out);
+        ESP_LOGW(TAG, "TX queue full, line dropped");
+        return false;
     }
     return true;
 }
@@ -89,20 +172,62 @@ void ble_svc_get_addr(char *buf, size_t len)
 
 /* ------------------------------------------------------------------ receive: assemble lines */
 
+/* Does this look like JavaScript rather than a file-manager shell command?
+ * e.g. reset();  E.showMessage("x")  require("Storage").list()  load()  Bangle.buzz() */
+static bool looks_like_js(const char *line)
+{
+    size_t first = strcspn(line, " ");            /* first word */
+    for (size_t i = 0; i < first; i++) {
+        if (line[i] == '(' || line[i] == '=' || line[i] == ';' || line[i] == '{') {
+            return true;
+        }
+    }
+    size_t n = strlen(line);
+    return n > 0 && line[n - 1] == ';';
+}
+
 static void dispatch_line(char *line)
 {
-    /* Gadgetbridge prefixes lines with 0x10 (and may send 0x03); skip control chars */
-    while (*line && (unsigned char)*line < 0x20) {
+    /* Gadgetbridge prefixes every line with 0x10 (DLE = "don't echo") and may send
+     * 0x03 (Ctrl-C) or spaces before it. Anything marked like that comes from Gadgetbridge
+     * and is JavaScript meant for an Espruino: never hand it to the shell. */
+    bool from_gb = false;
+    while (*line && ((unsigned char)*line < 0x20 || *line == ' ')) {
+        if (*line == 0x10) {
+            from_gb = true;
+        }
         line++;
     }
     if (!*line) {
         return;
     }
+    ESP_LOGD(TAG, "rx< %.100s", line);                                /* debug */
+    /* Gadgetbridge's connection probe: a real Bangle.js answers with the JSON string of
+     * its console device. Without an answer Gadgetbridge keeps asking / reconnecting. */
+    if (strstr(line, "process.env.CONSOLE")) {
+        ble_svc_send("\"Bluetooth\"", 11);
+        return;
+    }
+    if (strstr(line, "process.env.VERSION")) {
+        ble_svc_send("\"2v21\"", 6);
+        return;
+    }
     if (strstr(line, "GB(") || strstr(line, "setTime(")) {
         gb_handle_line(line);
-    } else {
-        file_manager_submit_ble((const uint8_t *)line, strlen(line));
+        return;
     }
+    if (from_gb || looks_like_js(line)) {
+        /* other Espruino JS (g.dump(), reset(), E.showMessage(...), Storage...): ignore
+         * silently - any text reply would only confuse Gadgetbridge */
+        ESP_LOGD(TAG, "ignored JS line: %.60s", line);
+        return;
+    }
+    for (const char *p = line; *p; p++) {
+        if ((unsigned char)*p < 0x20) {
+            return;                                /* binary junk is not a shell command */
+        }
+    }
+    file_manager_submit_ble((const uint8_t *)line, strlen(line));
 }
 
 static void on_rx(const uint8_t *data, size_t len)
@@ -111,12 +236,18 @@ static void on_rx(const uint8_t *data, size_t len)
         char c = (char)data[i];
         if (c == '\n' || c == '\r') {
             s_line[s_line_len] = '\0';
-            if (s_line_len) {
+            if (s_line_overflow) {
+                /* a truncated GB(...) line is broken JSON anyway: drop it entirely */
+                ESP_LOGW(TAG, "RX line longer than %d bytes dropped", RX_LINE_MAX - 1);
+            } else if (s_line_len) {
                 dispatch_line(s_line);
             }
             s_line_len = 0;
+            s_line_overflow = false;
         } else if (s_line_len < RX_LINE_MAX - 1) {
             s_line[s_line_len++] = c;
+        } else {
+            s_line_overflow = true;
         }
     }
 }
@@ -124,7 +255,7 @@ static void on_rx(const uint8_t *data, size_t len)
 static int gatt_access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt *ctxt, void *arg)
 {
     if (ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR) {
-        uint8_t buf[PREFERRED_MTU];
+        static uint8_t buf[RX_WRITE_MAX];     /* host task only: no need for stack space */
         uint16_t len = 0;
         if (ble_hs_mbuf_to_flat(ctxt->om, buf, sizeof(buf), &len) != 0) {
             return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
@@ -160,6 +291,8 @@ static int gap_event(struct ble_gap_event *e, void *arg)
             s_conn = e->connect.conn_handle;
             s_advertising = false;
             s_line_len = 0;
+            s_line_overflow = false;
+            s_tx_partial = false;
             ESP_LOGI(TAG, "connected");
             ui_on_data_changed();
         } else {
@@ -181,6 +314,8 @@ static int gap_event(struct ble_gap_event *e, void *arg)
         if (e->subscribe.attr_handle == s_tx_handle) {
             s_subscribed = e->subscribe.cur_notify;
             if (s_subscribed) {
+                /* queued, sent by tx_task - never blocks the host task */
+                phone_send_version();
                 phone_send_battery();
             }
         }
@@ -308,6 +443,9 @@ static void on_settings(void)
 
 void ble_svc_start(void)
 {
+    s_tx_queue = xQueueCreate(TX_QUEUE_LEN, sizeof(tx_msg_t));
+    xTaskCreate(tx_task, "ble_tx", 3072, NULL, 5, NULL);
+
     const esp_timer_create_args_t ta = { .callback = resume_adv, .name = "adv_resume" };
     esp_timer_create(&ta, &s_resume_timer);
 

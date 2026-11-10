@@ -8,6 +8,10 @@
 #include <stddef.h>
 
 void ble_svc_start(void);
+/* Send ONE text line to the phone (NUS TX). The line ending is added/normalised to "\r\n"
+ * (Gadgetbridge drops the char before "\n"), the message is queued and sent whole by a TX task,
+ * so lines from different tasks never interleave. Safe to call from any task, incl. the BLE host.
+ * Returns false if not connected/subscribed or the queue is full. */
 bool ble_svc_send(const void *data, size_t len);
 bool ble_svc_connected(void);
 bool ble_svc_advertising(void);

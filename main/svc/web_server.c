@@ -196,6 +196,22 @@ static void notify_transfer(void)
 
 /* ------------------------------------------------------------------ handlers */
 
+static esp_err_t conn_check(httpd_req_t *req)
+{
+    const char *u = req->uri;
+    if (strstr(u, "204")) {
+        httpd_resp_set_status(req, "204 No Content");
+        return httpd_resp_send(req, NULL, 0);
+    }
+    httpd_resp_set_type(req, "text/plain");
+    if (strstr(u, "hotspot-detect")) {
+        httpd_resp_set_type(req, "text/html");
+        return httpd_resp_sendstr(req, "<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>");
+    }
+    if (strstr(u, "connecttest")) return httpd_resp_sendstr(req, "Microsoft Connect Test");
+    return httpd_resp_sendstr(req, "Microsoft NCSI");
+}
+
 static esp_err_t page_index(httpd_req_t *req)
 {
     httpd_resp_set_type(req, "text/html; charset=utf-8");
@@ -920,6 +936,18 @@ void web_server_start(web_transfer_cb_t on_transfer)
         r.user_ctx = (void *)r.handler;      /* every route checks password / on-off first */
         r.handler = guarded;
         httpd_register_uri_handler(server, &r);
+    }
+    /* phones' "is there internet?" checks (no password): answer like the real internet so they
+     * keep using the watch's hotspot instead of switching to mobile data */
+    static const httpd_uri_t checks[] = {
+        { .uri = "/generate_204", .method = HTTP_GET, .handler = conn_check },          /* Android */
+        { .uri = "/gen_204", .method = HTTP_GET, .handler = conn_check },
+        { .uri = "/hotspot-detect.html", .method = HTTP_GET, .handler = conn_check },   /* Apple */
+        { .uri = "/connecttest.txt", .method = HTTP_GET, .handler = conn_check },       /* Windows */
+        { .uri = "/ncsi.txt", .method = HTTP_GET, .handler = conn_check },
+    };
+    for (size_t i = 0; i < sizeof(checks) / sizeof(checks[0]); i++) {
+        httpd_register_uri_handler(server, &checks[i]);
     }
     ESP_LOGI(TAG, "Web server running on port %d", config.server_port);
 }

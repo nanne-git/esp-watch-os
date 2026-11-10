@@ -9,9 +9,17 @@
  *   GB({"t":"musicinfo","artist":"..","track":"..","dur":200})
  *   GB({"t":"musicstate","state":"play","position":12})
  *   GB({"t":"find","n":true})
- * Watch -> phone (JSON + "\n"):
+ * Watch -> phone (one JSON object per line, ending in "\r\n"):
  *   {"t":"status","bat":85,"chg":0}  {"t":"music","n":"play"}
  *   {"t":"call","n":"REJECT"}  {"t":"findPhone","n":true}  {"t":"notify","id":1,"n":"DISMISS"}
+ *
+ * Two Gadgetbridge quirks this file has to deal with:
+ *  - Gadgetbridge cuts lines at "\n" and then drops the character BEFORE the "\n" (it expects
+ *    Espruino's "\r\n"). A line ending in plain "\n" loses its closing '}' and Gadgetbridge shows
+ *    "Malformed JSON from Bangle.js". ble_svc_send() therefore always terminates lines with "\r\n".
+ *  - What Gadgetbridge sends inside GB(...) is JavaScript, not strict JSON: strings may contain
+ *    \xNN, \v, octal \0..\377 escapes, raw Latin-1 bytes, and whole strings may be sent as
+ *    atob("base64"). gb_js_to_json() rewrites that into real JSON before cJSON parses it.
  */
 #include "phone.h"
 
@@ -25,7 +33,9 @@
 #include "esp_log.h"
 #include "esp_random.h"
 #include "freertos/FreeRTOS.h"
+#include "esp_app_desc.h"
 #include "freertos/semphr.h"
+#include "mbedtls/base64.h"
 #include "hw.h"
 #include "settings.h"
 #include "timesvc.h"
@@ -185,18 +195,13 @@ void call_end(void)
     }
 }
 
+/* One JSON object -> one line. cJSON_PrintUnformatted never emits raw newlines/control chars
+ * (they are escaped), and ble_svc_send() appends the "\r\n" Gadgetbridge needs. */
 static void send_json(cJSON *o)
 {
     char *txt = cJSON_PrintUnformatted(o);
     if (txt) {
-        size_t n = strlen(txt);
-        char *line = malloc(n + 2);
-        if (line) {
-            memcpy(line, txt, n);
-            line[n] = '\n';
-            ble_svc_send(line, n + 1);
-            free(line);
-        }
+        ble_svc_send(txt, strlen(txt));
         cJSON_free(txt);
     }
     cJSON_Delete(o);
@@ -285,6 +290,15 @@ void phone_send_battery(void)
     send_json(o);
 }
 
+void phone_send_version(void)
+{
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddStringToObject(o, "t", "ver");
+    cJSON_AddStringToObject(o, "fw", esp_app_get_description()->version);
+    cJSON_AddStringToObject(o, "hw", "ESP-Watch");
+    send_json(o);
+}
+
 bool phone_connected(void)
 {
     return ble_svc_connected();
@@ -346,9 +360,180 @@ static void handle_gb(cJSON *o)
         } else {
             haptic_stop();
         }
+    } else if (strcmp(t, "is_gps_active") == 0) {
+        /* Gadgetbridge asks whether the watch wants phone GPS: we have no GPS app, say no */
+        cJSON *r = cJSON_CreateObject();
+        cJSON_AddStringToObject(r, "t", "gps_power");
+        cJSON_AddBoolToObject(r, "status", false);
+        send_json(r);
     } else {
         ESP_LOGD(TAG, "unhandled GB message t=%s", t);
     }
+}
+
+/* ---- Gadgetbridge "JSON-ish" -> strict JSON ---- */
+
+typedef struct {
+    char  *buf;
+    size_t len, cap;
+} sbuf_t;
+
+static bool sb_put(sbuf_t *b, const char *s, size_t n)
+{
+    if (b->len + n + 1 > b->cap) {
+        size_t cap = (b->cap ? b->cap * 2 : 256);
+        while (cap < b->len + n + 1) {
+            cap *= 2;
+        }
+        char *nb = realloc(b->buf, cap);
+        if (!nb) {
+            return false;
+        }
+        b->buf = nb;
+        b->cap = cap;
+    }
+    memcpy(b->buf + b->len, s, n);
+    b->len += n;
+    b->buf[b->len] = '\0';
+    return true;
+}
+
+/* append one Latin-1 character (0..255) inside a JSON string, escaped if needed */
+static bool sb_char(sbuf_t *b, unsigned c)
+{
+    char tmp[8];
+    if (c == '"' || c == '\\') {
+        tmp[0] = '\\';
+        tmp[1] = (char)c;
+        return sb_put(b, tmp, 2);
+    }
+    if (c < 0x20 || c >= 0x7f) {
+        snprintf(tmp, sizeof(tmp), "\\u%04x", c & 0xff);
+        return sb_put(b, tmp, 6);
+    }
+    tmp[0] = (char)c;
+    return sb_put(b, tmp, 1);
+}
+
+static int hexval(char c)
+{
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+/* atob("...") at s (s points at 'a'); returns chars consumed, 0 if not an atob call */
+static size_t conv_atob(const char *s, const char *end, sbuf_t *b)
+{
+    if (end - s < 8 || strncmp(s, "atob(\"", 6) != 0) {
+        return 0;
+    }
+    const char *q = memchr(s + 6, '"', end - (s + 6));
+    if (!q || q + 1 >= end || q[1] != ')') {
+        return 0;
+    }
+    size_t in_len = q - (s + 6);
+    size_t out_len = 0;
+    unsigned char *bin = malloc(in_len * 3 / 4 + 4);
+    if (!bin) {
+        return 0;
+    }
+    bool ok = mbedtls_base64_decode(bin, in_len * 3 / 4 + 4, &out_len,
+                                    (const unsigned char *)s + 6, in_len) == 0;
+    ok = ok && sb_put(b, "\"", 1);
+    for (size_t i = 0; ok && i < out_len; i++) {
+        ok = sb_char(b, bin[i]);
+    }
+    ok = ok && sb_put(b, "\"", 1);
+    free(bin);
+    return ok ? (size_t)(q + 2 - s) : 0;
+}
+
+/* Returns a malloc'd strict-JSON copy of Gadgetbridge's GB(...) payload, or NULL. */
+static char *gb_js_to_json(const char *s, size_t n)
+{
+    sbuf_t b = { 0 };
+    const char *end = s + n;
+    bool in_str = false;
+    bool ok = sb_put(&b, "", 0);
+    while (ok && s < end) {
+        unsigned char c = (unsigned char)*s;
+        if (!in_str) {
+            if (c == '"') {
+                in_str = true;
+                ok = sb_put(&b, "\"", 1);
+                s++;
+            } else if (c == 'a') {
+                size_t used = conv_atob(s, end, &b);
+                if (used) {
+                    s += used;
+                } else {
+                    ok = sb_put(&b, s++, 1);
+                }
+            } else {
+                ok = sb_put(&b, s++, 1);
+            }
+            continue;
+        }
+        /* inside a string */
+        if (c == '"') {
+            in_str = false;
+            ok = sb_put(&b, "\"", 1);
+            s++;
+        } else if (c != '\\') {
+            ok = sb_char(&b, c);           /* raw Latin-1 / control bytes get \u00XX */
+            s++;
+        } else if (s + 1 >= end) {
+            s++;                           /* dangling backslash: drop */
+        } else {
+            char e = s[1];
+            s += 2;
+            switch (e) {
+            case '"': case '\\': case '/': case 'b': case 'f': case 'n': case 'r': case 't': {
+                char tmp[2] = { '\\', e };
+                ok = sb_put(&b, tmp, 2);
+                break;
+            }
+            case 'v':
+                ok = sb_char(&b, 0x0b);
+                break;
+            case 'u':
+                if (end - s >= 4 && hexval(s[0]) >= 0 && hexval(s[1]) >= 0 && hexval(s[2]) >= 0 &&
+                    hexval(s[3]) >= 0) {
+                    ok = sb_put(&b, "\\u", 2) && sb_put(&b, s, 4);
+                    s += 4;
+                } else {
+                    ok = sb_char(&b, 'u');
+                }
+                break;
+            case 'x':
+                if (end - s >= 2 && hexval(s[0]) >= 0 && hexval(s[1]) >= 0) {
+                    ok = sb_char(&b, (unsigned)(hexval(s[0]) * 16 + hexval(s[1])));
+                    s += 2;
+                } else {
+                    ok = sb_char(&b, 'x');
+                }
+                break;
+            default:
+                if (e >= '0' && e <= '7') {           /* octal: up to 3 digits, max 0377 */
+                    unsigned v = (unsigned)(e - '0');
+                    for (int k = 0; k < 2 && s < end && *s >= '0' && *s <= '7' && v * 8 + (*s - '0') <= 255; k++) {
+                        v = v * 8 + (unsigned)(*s++ - '0');
+                    }
+                    ok = sb_char(&b, v);
+                } else {
+                    ok = sb_char(&b, (unsigned char)e);   /* JS: unknown escape = the char */
+                }
+                break;
+            }
+        }
+    }
+    if (!ok) {
+        free(b.buf);
+        return NULL;
+    }
+    return b.buf;
 }
 
 static void apply_phone_timezone(double hours)
@@ -390,7 +575,7 @@ void gb_handle_line(const char *line)
         if (!end) {
             return;
         }
-        char *json = strndup(start, end - start);
+        char *json = gb_js_to_json(start, end - start);
         if (!json) {
             return;
         }

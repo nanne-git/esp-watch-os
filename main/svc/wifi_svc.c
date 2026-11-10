@@ -1,4 +1,5 @@
 #include "wifi_svc.h"
+#include "dns_server.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -71,6 +72,15 @@ static void nets_save(void)
         nvs_commit(h);
         nvs_close(h);
     }
+}
+
+static volatile int s_ap_clients;     /* devices connected to our hotspot */
+
+static int nets_count(void)
+{
+    int n = 0;
+    for (int i = 0; i < WIFI_SAVED_MAX; i++) n += s_nets[i].ssid[0] != 0;
+    return n;
 }
 
 static saved_net_t *nets_find(const char *ssid)
@@ -147,6 +157,9 @@ static void on_event(void *arg, esp_event_base_t base, int32_t id, void *data)
         ui_on_data_changed();
     } else if (base == WIFI_EVENT &&
                (id == WIFI_EVENT_AP_STACONNECTED || id == WIFI_EVENT_AP_STADISCONNECTED)) {
+        s_ap_clients += id == WIFI_EVENT_AP_STACONNECTED ? 1 : -1;
+        if (s_ap_clients < 0) s_ap_clients = 0;
+        ESP_LOGI(TAG, "hotspot: %d device(s) connected", s_ap_clients);
         ui_on_data_changed();
     }
 }
@@ -357,6 +370,13 @@ static void wifi_task(void *arg)
             xEventGroupWaitBits(s_ev, EV_DISCONN | EV_KICK, pdTRUE, pdFALSE, portMAX_DELAY);
             continue;
         }
+        /* A scan hops over all channels and takes the radio off the hotspot's channel:
+         * the hotspot disappears and its devices drop. So with the hotspot in use (or no
+         * saved network to look for) don't scan in the background. */
+        if (settings()->hotspot_on && (s_ap_clients > 0 || nets_count() == 0)) {
+            xEventGroupWaitBits(s_ev, EV_KICK, pdTRUE, pdFALSE, pdMS_TO_TICKS(30000));
+            continue;
+        }
         /* not connected: find the strongest saved network */
         wifi_ap_info_t aps[16];
         int n = wifi_svc_scan(aps, 16);
@@ -452,6 +472,18 @@ void wifi_svc_start(void)
     esp_event_loop_create_default();
     s_sta = esp_netif_create_default_wifi_sta();
     s_ap = esp_netif_create_default_wifi_ap();
+    /* hotspot hands out the watch itself as DNS server (see dns_server.c) */
+    {
+        esp_netif_dns_info_t dns = { 0 };
+        dns.ip.type = ESP_IPADDR_TYPE_V4;
+        dns.ip.u_addr.ip4.addr = ESP_IP4TOADDR(192, 168, 4, 1);
+        uint8_t offer = 1;           /* OFFER_DNS */
+        esp_netif_dhcps_stop(s_ap);
+        esp_netif_set_dns_info(s_ap, ESP_NETIF_DNS_MAIN, &dns);
+        esp_netif_dhcps_option(s_ap, ESP_NETIF_OP_SET, ESP_NETIF_DOMAIN_NAME_SERVER, &offer, sizeof(offer));
+        esp_netif_dhcps_start(s_ap);
+    }
+    dns_server_start();
     esp_netif_set_hostname(s_sta, settings()->hostname);
     wifi_init_config_t init = WIFI_INIT_CONFIG_DEFAULT();
     esp_wifi_init(&init);

@@ -54,6 +54,7 @@ void phone_music_cmd(const char *cmd);      /* "play","pause","next","previous",
 /* misc phone actions */
 void phone_find(bool ring);
 void phone_send_battery(void);
+void phone_send_version(void);           /* {"t":"ver",...} for Gadgetbridge's device info */
 bool phone_connected(void);
 
 /* Gadgetbridge line handler (one complete line from BLE) */

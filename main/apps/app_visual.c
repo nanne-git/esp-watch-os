@@ -166,8 +166,11 @@ static void view_show(int i)
             int sx = UI_W * 256 / hd.w, sy = (UI_H - 64) * 256 / hd.h;
             int sc = sx < sy ? sx : sy;
             lv_image_set_scale(s_view_img, sc > 256 ? 256 : sc);
+            snprintf(info, sizeof(info), "%d / %d   %s", i + 1, s_img_n, strrchr(p, '/') + 1);
+        } else {
+            lv_image_set_src(s_view_img, NULL);        /* not decodable: say so instead of a blank screen */
+            snprintf(info, sizeof(info), "Can't open %s", strrchr(p, '/') + 1);
         }
-        snprintf(info, sizeof(info), "%d / %d   %s", i + 1, s_img_n, strrchr(p, '/') + 1);
     }
     lv_label_set_text(s_view_info, info);
 }
@@ -280,7 +283,9 @@ static int avi_frame_us(FILE *f)
     size_t n = fread(h, 1, sizeof(h), f);
     for (size_t i = 0; i + 8 < n; i++) {
         if (!memcmp(h + i, "avih", 4)) {
-            return *(uint32_t *)(h + i + 8);         /* dwMicroSecPerFrame */
+            uint32_t us;                             /* dwMicroSecPerFrame (may be unaligned) */
+            memcpy(&us, h + i + 8, sizeof(us));
+            return (int)us;
         }
     }
     return 0;
@@ -362,14 +367,20 @@ static void video_task(void *arg)
         if (wait > 0) vTaskDelay(pdMS_TO_TICKS(wait / 1000));
         else next = esp_timer_get_time();          /* decoding slower than the video: no catch-up */
     }
+    bool opened = f && buf;
     if (f) fclose(f);
     free(buf);
     v->run = false;
-    v->task = NULL;
     if (ui_lock()) {
-        if (v->info) lv_label_set_text(v->info, "Finished");
+        if (v->info) {
+            lv_label_set_text(v->info, v->frames ? "Finished" : opened ? "Can't play: no MJPEG frames found"
+                                                                       : "Can't open this file");
+            lv_label_set_text(lv_obj_get_child(v->play, 0), LV_SYMBOL_PLAY);
+        }
         ui_unlock();
     }
+    /* only now: vid_close frees v as soon as task is NULL */
+    v->task = NULL;
     vTaskDelete(NULL);
 }
 

@@ -12,6 +12,7 @@
 
 #include "apps.h"
 #include "esp_random.h"
+#include "esp_timer.h"
 #include "audio.h"
 #include "file_manager.h"
 #include "freertos/FreeRTOS.h"
@@ -29,6 +30,8 @@ static int    s_track_n;
 static int    s_track_cur = -1;
 static bool   s_shuffle;
 static TaskHandle_t s_music_task;
+static int64_t s_track_start_us;     /* when the current track was started */
+static int    s_quick_fails;         /* tracks in a row that ended right away (undecodable) */
 
 static bool is_audio(const char *n)
 {
@@ -71,7 +74,12 @@ static void play_index(int i)
 {
     if (i < 0 || i >= s_track_n) return;
     s_track_cur = i;
-    player_play(s_tracks[i]);
+    s_track_start_us = esp_timer_get_time();
+    if (!player_play(s_tracks[i])) {
+        char msg[96];
+        snprintf(msg, sizeof(msg), "Can't play %s", strrchr(s_tracks[i], '/') + 1);
+        ui_toast(msg);
+    }
     ui_on_data_changed();
 }
 
@@ -93,6 +101,16 @@ static void music_task(void *arg)
     while (true) {
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
         vTaskDelay(pdMS_TO_TICKS(200));
+        /* a track that "finishes" within 2 s most likely couldn't be decoded: don't spin
+           through a library of broken files forever */
+        if (esp_timer_get_time() - s_track_start_us < 2000000) s_quick_fails++;
+        else s_quick_fails = 0;
+        if (s_quick_fails >= 3 || s_quick_fails >= s_track_n) {
+            s_quick_fails = 0;
+            ui_toast("Can't play this file");
+            ui_on_data_changed();
+            continue;
+        }
         next_track();
     }
 }
@@ -245,7 +263,10 @@ void music_open_file(const char *abs_path)
             return;
         }
     }
-    player_play(abs_path);                 /* outside the library (e.g. a recording) */
+    if (!player_play(abs_path)) {          /* outside the library (e.g. a recording) */
+        ui_toast("Can't play this file");
+        return;
+    }
     open_now_playing();
 }
 
