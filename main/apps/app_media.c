@@ -222,7 +222,9 @@ static void track_click(lv_event_t *e)
 }
 
 static void np_open_click(lv_event_t *e) { open_now_playing(); }
-static void rescan_click(lv_event_t *e) { library_scan(); ui_page_rebuild(); }
+static void scan_work(void *ctx) { library_scan(); }
+static void rescan_done(void *ctx) { ui_page_rebuild(); }
+static void rescan_click(lv_event_t *e) { ui_run_bg("Finding songs...", scan_work, rescan_done, NULL); }
 
 static void music_build(lv_obj_t *c, void *ctx)
 {
@@ -245,17 +247,19 @@ static void music_build(lv_obj_t *c, void *ctx)
     ui_row(c, LV_SYMBOL_REFRESH, UI_CARD2, "Rescan SD card", NULL, rescan_click, NULL);
 }
 
+static void music_open_done(void *ctx) { ui_page_push("Music", music_build, NULL, NULL); }
+
 void app_music_open(void)
 {
     music_init();
-    library_scan();
-    ui_page_push("Music", music_build, NULL, NULL);
+    ui_run_bg("Finding songs...", scan_work, music_open_done, NULL);   /* SD scan off the UI task */
 }
 
-void music_open_file(const char *abs_path)
+static char s_open_path[FM_MAX_PATH];
+
+static void open_file_done(void *ctx)
 {
-    music_init();
-    library_scan();
+    const char *abs_path = s_open_path;
     for (int i = 0; i < s_track_n; i++) {
         if (strcmp(s_tracks[i], abs_path) == 0) {
             play_index(i);
@@ -268,6 +272,13 @@ void music_open_file(const char *abs_path)
         return;
     }
     open_now_playing();
+}
+
+void music_open_file(const char *abs_path)
+{
+    music_init();
+    strlcpy(s_open_path, abs_path, sizeof(s_open_path));
+    ui_run_bg("Opening...", scan_work, open_file_done, NULL);
 }
 
 /* ======================================================================== phone music */

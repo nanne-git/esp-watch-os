@@ -59,6 +59,14 @@ static void display_rounder(lv_event_t *e)
     a->y2 |= 1;
 }
 
+volatile uint32_t g_frames, g_flush_px;      /* debug: frames drawn / pixels sent */
+static void frame_cb(lv_event_t *e) { g_frames++; }
+static void inval_cb(lv_event_t *e)
+{
+    const lv_area_t *a = lv_event_get_param(e);
+    g_flush_px += lv_area_get_size(a);
+}
+
 static lv_display_t *display_start(void)
 {
     const lvgl_port_cfg_t port_cfg = {
@@ -95,6 +103,8 @@ static lv_display_t *display_start(void)
     lv_display_t *disp = lvgl_port_add_disp(&disp_cfg);   /* generic SPI path: waits for DMA done */
     if (!disp) return NULL;
     lv_display_add_event_cb(disp, display_rounder, LV_EVENT_INVALIDATE_AREA, NULL);
+    lv_display_add_event_cb(disp, frame_cb, LV_EVENT_RENDER_READY, NULL);
+    lv_display_add_event_cb(disp, inval_cb, LV_EVENT_INVALIDATE_AREA, NULL);
 
     esp_lcd_touch_handle_t tp = NULL;
     if (bsp_touch_new(NULL, &tp) == ESP_OK && tp) {

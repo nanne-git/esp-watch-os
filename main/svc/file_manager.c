@@ -35,6 +35,7 @@
 #include "hw.h"
 #include "mbedtls/base64.h"
 #include "lua_apps.h"
+#include "devtools.h"
 #include "audio.h"
 #include "esp_memory_utils.h"
 #include "esp_heap_caps.h"
@@ -722,6 +723,28 @@ static void cmd_tasks(void)
     free(ts);
 }
 
+/* top: CPU use per task over 3 seconds (both cores: 200 % total) */
+static void cmd_top(void)
+{
+    extern volatile uint32_t g_frames, g_flush_px;
+    cJSON_Delete(dev_tasks_json());          /* baseline */
+    uint32_t f0 = g_frames, p0 = g_flush_px;
+    vTaskDelay(pdMS_TO_TICKS(3000));
+    reply("screen: %.1f frames/s, %u px invalidated/s", (g_frames - f0) / 3.0, (unsigned)((g_flush_px - p0) / 3));
+    cJSON *a = dev_tasks_json();
+    if (!a) return;
+    double total = 0;
+    cJSON *t;
+    cJSON_ArrayForEach(t, a) {
+        double cpu = cJSON_GetObjectItem(t, "cpu")->valuedouble;
+        const char *name = cJSON_GetObjectItem(t, "name")->valuestring;
+        if (strncmp(name, "IDLE", 4) != 0) total += cpu;
+        if (cpu >= 0.5) reply("%-16s %5.1f %%", name, cpu);
+    }
+    reply("busy (not idle): %.1f %% of 200 %%", total);
+    cJSON_Delete(a);
+}
+
 static void cmd_apps(void)
 {
     lua_app_info_t *list = calloc(32, sizeof(*list));
@@ -769,6 +792,7 @@ static bool device_command(const char *cmd, char *a1, char *a2, char *text, char
     if (strcmp(cmd, "putb") == 0) { cmd_putb(a1, text); return true; }
     if (strcmp(cmd, "apps") == 0) { cmd_apps(); return true; }
     if (strcmp(cmd, "tasks") == 0) { cmd_tasks(); return true; }
+    if (strcmp(cmd, "top") == 0) { cmd_top(); return true; }
     if (strcmp(cmd, "hex") == 0 && a1 && text) {         /* hex <offset> <card path>: 32 bytes */
         const char *path = text;          /* text = everything after the offset */
         char abs[FM_MAX_PATH];

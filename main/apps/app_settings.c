@@ -145,12 +145,12 @@ static void wifi_scan_build(lv_obj_t *c, void *ctx)
     }
 }
 
+static void wifi_scan_work(void *ctx) { s_ap_n = wifi_svc_scan(s_aps, 20); }
+static void wifi_scan_done(void *ctx) { ui_page_push("Networks", wifi_scan_build, NULL, NULL); }
+
 static void wifi_scan_click(lv_event_t *e)
 {
-    ui_toast("Scanning...");
-    /* scanning blocks ~3 s; it's acceptable here and keeps the code simple */
-    s_ap_n = wifi_svc_scan(s_aps, 20);
-    ui_page_push("Networks", wifi_scan_build, NULL, NULL);
+    ui_run_bg("Scanning Wi-Fi...", wifi_scan_work, wifi_scan_done, NULL);   /* ~3 s, off the UI task */
 }
 
 static char s_forget[33];
@@ -613,11 +613,22 @@ static void mount_click(lv_event_t *e)
     ui_page_rebuild();
 }
 
+/* free-space count on a big FAT32 card can take seconds: done in the background first */
+static char     s_card_name[16];
+static uint64_t s_card_total, s_card_free;
+static bool     s_card_ok;
+
+static void storage_work(void *ctx)
+{
+    s_card_ok = fm_is_mounted() && fm_card_info(s_card_name, sizeof(s_card_name), &s_card_total, &s_card_free);
+}
+
 static void storage_build(lv_obj_t *c, void *ctx)
 {
     char name[16], b1[24], b2[24], b3[24];
-    uint64_t total = 0, freeb = 0;
-    if (fm_is_mounted() && fm_card_info(name, sizeof(name), &total, &freeb)) {
+    uint64_t total = s_card_total, freeb = s_card_free;
+    strlcpy(name, s_card_name, sizeof(name));
+    if (s_card_ok) {
         lv_obj_t *card = ui_card(c);
         lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
         lv_obj_set_style_pad_row(card, 10, 0);
@@ -650,7 +661,8 @@ static void storage_build(lv_obj_t *c, void *ctx)
     ui_row(c, NULL, 0, "Free PSRAM", b2, NULL, NULL);
 }
 
-static void open_storage(lv_event_t *e) { ui_page_push("Storage", storage_build, NULL, NULL); }
+static void storage_done(void *ctx) { ui_page_push("Storage", storage_build, NULL, NULL); }
+static void open_storage(lv_event_t *e) { ui_run_bg("Reading SD card...", storage_work, storage_done, NULL); }
 
 /* ======================================================================== Weather & location */
 

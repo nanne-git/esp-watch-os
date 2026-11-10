@@ -298,12 +298,90 @@ void ui_keep_awake(bool on)
     }
 }
 
+/* ======================================================================== background jobs */
+
+typedef struct {
+    ui_bg_fn_t work, done;
+    void      *ctx;
+} bg_job_t;
+
+static QueueHandle_t s_bg_queue;
+static lv_obj_t     *s_busy_ov;
+static volatile bool s_bg_busy;
+
+static void busy_hide(void)
+{
+    if (s_busy_ov) {
+        lv_obj_delete(s_busy_ov);
+        s_busy_ov = NULL;
+    }
+}
+
+static void bg_task(void *arg)
+{
+    bg_job_t j;
+    while (true) {
+        if (xQueueReceive(s_bg_queue, &j, portMAX_DELAY) != pdTRUE) continue;
+        if (j.work) j.work(j.ctx);              /* no UI lock held: the screen stays live */
+        if (ui_lock()) {
+            busy_hide();
+            s_bg_busy = false;
+            if (j.done) j.done(j.ctx);
+            ui_unlock();
+        } else {
+            s_bg_busy = false;
+        }
+    }
+}
+
+bool ui_run_bg(const char *busy_msg, ui_bg_fn_t work, ui_bg_fn_t done, void *ctx)
+{
+    if (s_bg_busy) {
+        ui_toast("Busy - please wait");
+        return false;
+    }
+    if (!s_bg_queue) {
+        s_bg_queue = xQueueCreate(2, sizeof(bg_job_t));
+        if (!s_bg_queue || xTaskCreate(bg_task, "ui_bg", 6144, NULL, 3, NULL) != pdPASS) {
+            ui_toast("Out of memory");
+            return false;
+        }
+    }
+    /* spinner overlay; it also swallows touches until the job is done */
+    if (ui_lock()) {
+        busy_hide();
+        s_busy_ov = lv_obj_create(lv_layer_top());
+        lv_obj_remove_style_all(s_busy_ov);
+        lv_obj_set_size(s_busy_ov, UI_W, UI_H);
+        lv_obj_set_style_bg_color(s_busy_ov, lv_color_black(), 0);
+        lv_obj_set_style_bg_opa(s_busy_ov, LV_OPA_60, 0);
+        lv_obj_add_flag(s_busy_ov, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_t *sp = lv_spinner_create(s_busy_ov);
+        lv_obj_set_size(sp, 70, 70);
+        lv_obj_align(sp, LV_ALIGN_CENTER, 0, -24);
+        lv_obj_set_style_arc_color(sp, ui_accent(), LV_PART_INDICATOR);
+        lv_obj_t *l = ui_label(s_busy_ov, busy_msg ? busy_msg : "Working...", &lv_font_montserrat_20, UI_TEXT);
+        lv_obj_align(l, LV_ALIGN_CENTER, 0, 40);
+        ui_unlock();
+    }
+    s_bg_busy = true;
+    bg_job_t j = { work, done, ctx };
+    xQueueSend(s_bg_queue, &j, portMAX_DELAY);
+    return true;
+}
+
 /* runs in LVGL context every 250 ms */
 static void tick_cb(lv_timer_t *t)
 {
-    static int64_t last_refresh;
+    static int64_t last_refresh, last_tick;
     uint32_t inactive = lv_display_get_inactive_time(NULL);
     int64_t now = esp_timer_get_time();
+    /* freeze detector: this timer should run every 250 ms; a big gap means something
+     * blocked the UI task - log it so it can be found and moved to ui_run_bg() */
+    if (last_tick && now - last_tick > 600000) {
+        ESP_LOGW(TAG, "UI was blocked for %lld ms (page depth %d)", (now - last_tick) / 1000 - 250, s_depth);
+    }
+    last_tick = now;
 
     if (!s_awake) {
         /* a touch while the screen is off wakes it */

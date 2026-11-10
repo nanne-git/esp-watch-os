@@ -112,14 +112,18 @@ static void rename_done(const char *name, void *user)
     after_change();
 }
 
+static int s_bg_err;          /* errno of the last background file job, 0 = ok */
+
+static void delete_work(void *ctx) { s_bg_err = fm_remove_recursive(s_sel) != 0 ? errno : 0; }
+static void delete_done(void *ctx)
+{
+    ui_toast(s_bg_err ? strerror(s_bg_err) : "Deleted");
+    after_change();
+}
+
 static void do_delete(void *u)
 {
-    if (fm_remove_recursive(s_sel) != 0) {
-        ui_toast(strerror(errno));
-    } else {
-        ui_toast("Deleted");
-    }
-    after_change();
+    ui_run_bg("Deleting...", delete_work, delete_done, NULL);     /* big folders take a while */
 }
 
 static void info_build(lv_obj_t *c, void *ctx)
@@ -220,6 +224,25 @@ static void mkdir_click(lv_event_t *e)
     ui_keyboard("New folder", "", false, mkdir_done, lv_event_get_user_data(e));
 }
 
+static char s_paste_dst[FM_MAX_PATH];
+
+static void paste_work(void *ctx)
+{
+    bool ok = s_clip_cut ? rename(s_clip, s_paste_dst) == 0 : fm_copy_recursive(s_clip, s_paste_dst);
+    s_bg_err = ok ? 0 : (errno ? errno : EIO);
+}
+
+static void paste_done(void *ctx)
+{
+    if (s_bg_err) {
+        ui_toast(strerror(s_bg_err));
+    } else {
+        ui_toast(s_clip_cut ? "Moved" : "Copied");
+        if (s_clip_cut) s_clip[0] = '\0';
+    }
+    after_change();
+}
+
 static void paste_click(lv_event_t *e)
 {
     const char *dir = lv_event_get_user_data(e);
@@ -252,15 +275,8 @@ static void paste_click(lv_event_t *e)
         ui_toast("Can't put a folder inside itself");
         return;
     }
-    ui_toast(s_clip_cut ? "Moving..." : "Copying...");
-    bool ok = s_clip_cut ? rename(s_clip, dst) == 0 : fm_copy_recursive(s_clip, dst);
-    if (!ok) {
-        ui_toast(strerror(errno));
-    } else {
-        ui_toast(s_clip_cut ? "Moved" : "Copied");
-        if (s_clip_cut) s_clip[0] = '\0';
-    }
-    after_change();
+    strlcpy(s_paste_dst, dst, sizeof(s_paste_dst));
+    ui_run_bg(s_clip_cut ? "Moving..." : "Copying...", paste_work, paste_done, NULL);   /* 69 MB = ~1 min */
 }
 
 static void row_free_path(lv_event_t *e)

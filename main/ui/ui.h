@@ -115,6 +115,12 @@ void ui_open_widgets(void);
 void ui_open_face_picker(void);
 void ui_open_power_menu(void);
 
+/* Run slow work (SD card, Wi-Fi scan, file copy) OFF the UI task so the screen never freezes.
+ * Shows a spinner with busy_msg; work(ctx) runs in a background task; done(ctx) then runs in
+ * LVGL context. One job at a time - returns false if one is already running. */
+typedef void (*ui_bg_fn_t)(void *ctx);
+bool ui_run_bg(const char *busy_msg, ui_bg_fn_t work, ui_bg_fn_t done, void *ctx);
+
 /* recent apps (ui_recents.c) */
 void ui_open_recents(void);
 void ui_recents_note(const char *name, const char *icon, bool icon_img, uint32_t color,

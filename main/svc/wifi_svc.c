@@ -347,10 +347,41 @@ static bool try_connect(const char *ssid, const char *pass)
     return true;
 }
 
+/* The hotspot keeps the radio fully awake (an access point can't nap like a station does),
+ * which is a big heat/battery cost. Turn it off after 10 minutes with nobody connected. */
+#define HOTSPOT_IDLE_MIN 10
+static volatile bool s_hotspot_idle_off;
+
+static void hotspot_idle_check(void *arg)
+{
+    static int idle_min;
+    if (settings()->hotspot_on && s_ap_clients == 0) {
+        if (++idle_min >= HOTSPOT_IDLE_MIN) {
+            idle_min = 0;
+            s_hotspot_idle_off = true;
+            xEventGroupSetBits(s_ev, EV_KICK);       /* wifi_task does the actual change */
+        }
+    } else {
+        idle_min = 0;
+    }
+}
+
 static void wifi_task(void *arg)
 {
     int backoff_s = 5;
+    {
+        const esp_timer_create_args_t ta = { .callback = hotspot_idle_check, .name = "ap_idle" };
+        esp_timer_handle_t t;
+        if (esp_timer_create(&ta, &t) == ESP_OK) esp_timer_start_periodic(t, 60ULL * 1000000);
+    }
     while (true) {
+        if (s_hotspot_idle_off) {
+            s_hotspot_idle_off = false;
+            ESP_LOGI(TAG, "hotspot unused for %d min - turning it off", HOTSPOT_IDLE_MIN);
+            settings_edit()->hotspot_on = false;
+            settings_commit();
+            ui_toast("Hotspot turned off (not used)");
+        }
         if (!s_started || !settings()->wifi_on) {
             xEventGroupWaitBits(s_ev, EV_KICK, pdTRUE, pdFALSE, pdMS_TO_TICKS(5000));
             continue;
