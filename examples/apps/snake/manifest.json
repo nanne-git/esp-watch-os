@@ -1,0 +1,8 @@
+{
+  "name": "Snake",
+  "icon": "shuffle",
+  "color": "#30D158",
+  "version": "1.0",
+  "description": "Classic snake: turn left/right, eat, grow, don't crash",
+  "memory_kb": 256
+}

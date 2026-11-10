@@ -37,6 +37,7 @@ Examples to copy from are in [`examples/apps/`](../examples/apps):
 - **breathe**: timers, an animated arc, keeping the screen on
 - **todo**: lists, keyboard, choices, saving tables
 - **bitcoin**: HTTP and JSON
+- **snake**: a complete game - timers, moving boxes, saved best score
 
 To install them all, run `watchctl.py app push examples/apps/todo/` (and the same for the others), or use **Install app folder** in the web Apps tab.
 
