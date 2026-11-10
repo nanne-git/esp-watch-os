@@ -39,8 +39,12 @@ static bool      s_dimmed_aod;
 static int64_t   s_wake_time;
 static lv_obj_t *s_call_ov, *s_alarm_ov, *s_notif_banner;
 static lv_timer_t *s_banner_timer;
-static esp_pm_lock_handle_t s_cpu_lock;   /* held while the screen is on */
-static bool s_cpu_locked;
+/* CPU speed on demand: full speed (240 MHz) only while the screen is actually drawing or
+ * being touched; ~0.4 s after the last frame it drops back to 80 MHz - even with the screen
+ * on (a static watch face needs almost no CPU). Faster when it matters, cooler otherwise. */
+static esp_pm_lock_handle_t s_cpu_lock;
+static bool    s_cpu_locked;
+static int64_t s_last_busy_us;
 
 static void cpu_fast(bool on)
 {
@@ -48,6 +52,15 @@ static void cpu_fast(bool on)
     s_cpu_locked = on;
     if (on) esp_pm_lock_acquire(s_cpu_lock); else esp_pm_lock_release(s_cpu_lock);
 }
+
+static void cpu_busy(void)
+{
+    s_last_busy_us = esp_timer_get_time();
+    cpu_fast(true);
+}
+
+static void render_start_cb(lv_event_t *e) { cpu_busy(); }     /* a frame is being drawn */
+static void touch_busy_cb(lv_event_t *e) { cpu_busy(); }       /* finger down / moving */
 
 lv_color_t ui_accent(void)
 {
@@ -269,7 +282,7 @@ static void do_wake(void)
 {
     shield_set(false);
     if (!s_awake || s_dimmed_aod) {
-        cpu_fast(true);
+        cpu_busy();
         s_awake = true;
         s_dimmed_aod = false;
         s_wake_time = esp_timer_get_time();
@@ -427,6 +440,9 @@ static void tick_cb(lv_timer_t *t)
     static int64_t last_refresh, last_tick;
     uint32_t inactive = lv_display_get_inactive_time(NULL);
     int64_t now = esp_timer_get_time();
+    if (s_cpu_locked && now - s_last_busy_us > 400000) {
+        cpu_fast(false);                  /* nothing drawn for 0.4 s: back to 80 MHz */
+    }
     /* freeze detector: this timer should run every 250 ms; a big gap means something
      * blocked the UI task - log it so it can be found and moved to ui_run_bg() */
     if (last_tick && now - last_tick > 600000) {
@@ -955,8 +971,12 @@ void ui_start(void)
     for (lv_indev_t *in = lv_indev_get_next(NULL); in; in = lv_indev_get_next(in)) {
         if (lv_indev_get_type(in) == LV_INDEV_TYPE_POINTER) {
             lv_indev_add_event_cb(in, touch_haptic_cb, LV_EVENT_PRESSED, NULL);
+            lv_indev_add_event_cb(in, touch_busy_cb, LV_EVENT_PRESSED, NULL);
+            lv_indev_add_event_cb(in, touch_busy_cb, LV_EVENT_PRESSING, NULL);
         }
     }
+
+    lv_display_add_event_cb(lv_display_get_default(), render_start_cb, LV_EVENT_RENDER_START, NULL);
 
     lv_indev_t *inj = lv_indev_create();
     lv_indev_set_type(inj, LV_INDEV_TYPE_POINTER);

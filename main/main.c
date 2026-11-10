@@ -72,7 +72,7 @@ static lv_display_t *display_start(void)
 {
     const lvgl_port_cfg_t port_cfg = {
         .task_priority = 4,
-        .task_stack = 12288,
+        .task_stack = 16384,          /* -O2 + deep layouts: 12 KB left only 2.5 KB spare */
         .task_affinity = 1,
         .task_max_sleep_ms = 500,
         .timer_period_ms = 10,
@@ -133,7 +133,7 @@ void app_main(void)
 
     /* dynamic frequency scaling: 80 MHz when idle, up to 160 MHz while someone holds a lock
      * (the UI holds one while the screen is on; Wi-Fi/SPI drivers take their own) */
-    esp_pm_config_t pm = { .max_freq_mhz = 160, .min_freq_mhz = 80, .light_sleep_enable = false };
+    esp_pm_config_t pm = { .max_freq_mhz = 240, .min_freq_mhz = 80, .light_sleep_enable = false };   /* 240 only while drawing (ui.c) */
     if (esp_pm_configure(&pm) != ESP_OK) {
         ESP_LOGW(TAG, "power management not available");
     }
