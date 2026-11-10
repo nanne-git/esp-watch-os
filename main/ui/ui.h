@@ -123,6 +123,17 @@ void ui_open_power_menu(void);
 typedef void (*ui_bg_fn_t)(void *ctx);
 bool ui_run_bg(const char *busy_msg, ui_bg_fn_t work, ui_bg_fn_t done, void *ctx);
 
+/* ---- apps: launch / minimize / resume (like phone apps) ----
+ * ui_app_launch opens an app (or resumes it if minimized). ui_minimize parks the current
+ * app's pages - screens and state stay alive - and shows the watch face. */
+void ui_app_launch(const char *name, const char *icon, bool icon_img, uint32_t color,
+                   void (*open)(void), const char *lua_id);
+bool ui_minimize(void);
+bool ui_task_exists(const char *name);       /* is this app minimized? */
+void ui_task_close(const char *name);        /* close a minimized app */
+void ui_page_keep_awake(void);               /* top page keeps the screen on while visible */
+void ui_page_no_minimize(void);              /* top page closes instead of minimizing */
+
 /* recent apps (ui_recents.c) */
 void ui_open_recents(void);
 void ui_recents_note(const char *name, const char *icon, bool icon_img, uint32_t color,

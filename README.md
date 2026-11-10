@@ -80,6 +80,14 @@ python3 tools/watchctl.py time $(date +%s)
 
 The same text commands (plus file commands like `ls`, `cp`, `rm`) also work over BLE (Nordic UART).
 
+## Minimize and switch apps
+
+Like a phone: tap **–** (top-right of any app) or long-press **BOOT** to minimize. The app
+keeps running with its screen and state. **Hold –** (or long-press BOOT on the watch face) to
+see all minimized apps: tap one to continue where you left it, or ✕ / **Close all**. Opening a
+minimized app from the app list also resumes it. Up to 4 apps stay minimized (the oldest is
+closed after that); the screen going to sleep minimizes the open app too.
+
 ## Make your own apps (Lua)
 
 Apps are Lua scripts on the SD card (`/apps/<name>/main.lua`), installed and hot-reloaded without

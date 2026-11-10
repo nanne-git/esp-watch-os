@@ -53,6 +53,7 @@ void ui_recents_note(const char *name, const char *icon, bool icon_img, uint32_t
 static const char *status_of(const recent_t *r, char *buf, size_t size)
 {
     buf[0] = '\0';
+    bool minimized = ui_task_exists(r->name);
     if (r->lua_id[0]) {
         char id[32];
         if (lua_apps_running(id, sizeof(id)) && strcmp(id, r->lua_id) == 0) strlcpy(buf, "Open", size);
@@ -73,11 +74,16 @@ static const char *status_of(const recent_t *r, char *buf, size_t size)
             snprintf(buf, size, "%s %d:%02d", sw_running() ? "Running" : "Stopped", s / 60, s % 60);
         }
     }
+    if (minimized) {
+        if (buf[0]) strlcat(buf, "  " LV_SYMBOL_MINUS " Minimized", size);
+        else strlcpy(buf, LV_SYMBOL_MINUS " Minimized", size);
+    }
     return buf;
 }
 
 static void stop_app(const recent_t *r)
 {
+    ui_task_close(r->name);                  /* minimized: close its pages properly */
     if (r->lua_id[0]) {
         char id[32];
         if (lua_apps_running(id, sizeof(id)) && strcmp(id, r->lua_id) == 0) lua_apps_stop();
@@ -108,10 +114,8 @@ static void open_cb(lv_event_t *e)
     int i = (int)(intptr_t)lv_event_get_user_data(e);
     if (i >= s_n) return;
     recent_t r = s_rec[i];
-    ui_go_home();
-    if (r.lua_id[0]) lua_app_open(r.lua_id);
-    else if (r.open) r.open();
-    ui_recents_note(r.name, r.icon, r.icon_img, r.color, r.open, r.lua_id[0] ? r.lua_id : NULL);
+    if (!ui_task_exists(r.name)) ui_go_home();   /* closes this page (resume handles it itself) */
+    ui_app_launch(r.name, r.icon, r.icon_img, r.color, r.open, r.lua_id[0] ? r.lua_id : NULL);
 }
 
 static void close_cb(lv_event_t *e)
@@ -204,5 +208,5 @@ static void recents_close(void *ctx) { s_list = NULL; }
 
 void ui_open_recents(void)
 {
-    ui_page_push("Recent", recents_build, recents_close, NULL);
+    ui_page_push("Apps", recents_build, recents_close, NULL);
 }

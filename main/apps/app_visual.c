@@ -421,14 +421,14 @@ static void vid_build(lv_obj_t *c, void *ctx)
     lv_obj_align(v->info, LV_ALIGN_BOTTOM_LEFT, 16, -26);
     v->play = ui_round_button(c, LV_SYMBOL_PLAY, 60, UI_PURPLE, vid_play, NULL);
     lv_obj_align(v->play, LV_ALIGN_BOTTOM_RIGHT, -16, -8);
-    ui_keep_awake(true);
+    ui_page_keep_awake();
+    ui_page_no_minimize();         /* minimize = close: don't decode video in the background */
     vid_play(NULL);
 }
 
 static void vid_close(void *ctx)
 {
     video_t *v = s_vid;
-    ui_keep_awake(false);
     if (!v) return;
     if (v->img) lv_image_set_src(v->img, NULL);   /* still drawn during the slide-out */
     v->img = NULL;

@@ -1560,7 +1560,9 @@ static const luaL_Reg HTTP_FUNCS[] = { { "get", http_get }, { "post", http_post 
 
 static void exit_async(void *arg)
 {
-    if ((uint32_t)(uintptr_t)arg == s_app.gen && s_app.page_open && ui_page_depth() == s_app.page_depth) {
+    /* only if the app's page is the one on screen (it may be minimized) */
+    if ((uint32_t)(uintptr_t)arg == s_app.gen && s_app.page_open && s_app.root &&
+        lv_obj_get_screen(s_app.root) == lv_screen_active()) {
         ui_page_pop();
     }
 }
@@ -1812,7 +1814,13 @@ void lua_app_open(const char *id)
         ui_toast("App not found");
         return;
     }
-    if (s_app.page_open) ui_go_home();   /* one Lua app at a time */
+    if (s_app.page_open) {                       /* one Lua app at a time */
+        ui_task_close(s_app.info.name);          /* ...minimized */
+        if (s_app.page_open) {
+        ui_task_close(s_app.info.name);
+        if (s_app.page_open) ui_go_home();
+    }       /* ...or on screen */
+    }
     s_app.info = info;
     strlcpy(s_app.id, id, sizeof(s_app.id));
     snprintf(s_app.dir, sizeof(s_app.dir), LUA_APPS_DIR "/%s", id);

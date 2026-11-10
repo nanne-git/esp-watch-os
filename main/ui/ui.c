@@ -1,4 +1,5 @@
 #include "ui.h"
+#include "lua_apps.h"
 #include "display.h"
 
 #include <stdio.h>
@@ -33,7 +34,27 @@ typedef struct {
     void       *ctx;
     bool        raw;
     char        title[32];
+    bool        app_root;      /* first page of an app (launched via ui_app_launch) */
+    bool        awake;         /* holds a keep-awake while visible */
+    bool        no_min;        /* can't be minimized (closes instead, e.g. video) */
+    bool        lua;           /* app_root of a Lua app */
+    char        app[32];       /* app name, on the root page */
 } page_t;
+
+/* ---- minimized apps: their pages (screens + state) parked here, alive but hidden ---- */
+#define MAX_TASKS 4
+typedef struct {
+    bool     used;
+    char     name[32];
+    bool     lua;
+    int      n;
+    uint32_t stamp;            /* for evicting the oldest */
+    page_t   pages[PAGE_MAX];
+} task_t;
+static task_t   s_tasks[MAX_TASKS];
+static uint32_t s_task_seq;
+static char     s_launch_name[32];   /* set by ui_app_launch: next pushed page is the app root */
+static bool     s_launch_lua;
 
 static lv_obj_t *s_home;
 static page_t    s_pages[PAGE_MAX];
@@ -102,6 +123,14 @@ static lv_obj_t *new_screen(void)
     return scr;
 }
 
+static void minimize_btn_cb(lv_event_t *e) { ui_minimize(); }
+static void switcher_btn_cb(lv_event_t *e)
+{
+    lv_indev_wait_release(lv_indev_active());     /* no click after the long press */
+    ui_minimize();
+    ui_open_recents();
+}
+
 static void build_page(page_t *p)
 {
     lv_obj_clean(p->scr);
@@ -122,6 +151,25 @@ static void build_page(page_t *p)
     lv_obj_set_style_text_font(bl, &lv_font_montserrat_24, 0);
     lv_obj_set_style_text_color(bl, ui_accent(), 0);
     lv_obj_center(bl);
+
+    /* "–" minimize: tap = keep the app running in the background and go to the watch face,
+     * hold = show all minimized apps (app switcher) */
+    bool in_app = false;
+    for (page_t *q = s_pages; q <= p && q < s_pages + s_depth; q++) in_app |= q->app_root;
+    if (in_app) {
+        lv_obj_t *mn = lv_button_create(hdr);
+        lv_obj_set_size(mn, 56, 48);
+        lv_obj_align(mn, LV_ALIGN_RIGHT_MID, -8, 4);
+        lv_obj_set_style_bg_opa(mn, LV_OPA_TRANSP, 0);
+        lv_obj_set_style_shadow_width(mn, 0, 0);
+        lv_obj_add_event_cb(mn, minimize_btn_cb, LV_EVENT_SHORT_CLICKED, NULL);
+        lv_obj_add_event_cb(mn, switcher_btn_cb, LV_EVENT_LONG_PRESSED, NULL);
+        lv_obj_t *ml = lv_label_create(mn);
+        lv_label_set_text(ml, LV_SYMBOL_MINUS);
+        lv_obj_set_style_text_font(ml, &lv_font_montserrat_24, 0);
+        lv_obj_set_style_text_color(ml, ui_accent(), 0);
+        lv_obj_center(ml);
+    }
 
     lv_obj_t *t = lv_label_create(hdr);
     lv_label_set_text(t, p->title);
@@ -167,6 +215,12 @@ static lv_obj_t *push(const char *title, page_build_t build, page_fn_t on_close,
     p->ctx = ctx;
     p->raw = raw;
     strlcpy(p->title, title ? title : "", sizeof(p->title));
+    if (s_launch_name[0]) {                /* first page of a just-launched app */
+        p->app_root = true;
+        p->lua = s_launch_lua;
+        strlcpy(p->app, s_launch_name, sizeof(p->app));
+        s_launch_name[0] = '\0';
+    }
     lv_obj_add_event_cb(p->scr, page_gesture_cb, LV_EVENT_GESTURE, NULL);
     build_page(p);
     lv_screen_load_anim(p->scr, PAGE_ANIM_IN, PAGE_ANIM_MS, 0, false);
@@ -201,6 +255,7 @@ void ui_page_pop(void)
     if (p->on_close) {
         p->on_close(p->ctx);
     }
+    if (p->awake) ui_keep_awake(false);
     lv_obj_t *prev = s_depth > 0 ? s_pages[s_depth - 1].scr : s_home;
     /* Load the previous screen and delete this one AFTER the current event: pop is often
      * called from this screen's own back-swipe/back-button event, and deleting the screen
@@ -232,6 +287,7 @@ static void go_home(bool animate)
         if (p->on_close) {
             p->on_close(p->ctx);
         }
+        if (p->awake) ui_keep_awake(false);
         if (p->scr != top) {
             lv_obj_delete_async(p->scr);   /* hidden pages underneath */
         }
@@ -249,6 +305,148 @@ static void go_home(bool animate)
 }
 
 void ui_go_home(void) { go_home(true); }
+
+/* ---- minimize / resume ---- */
+
+void ui_page_keep_awake(void)
+{
+    if (s_depth == 0) return;
+    page_t *p = &s_pages[s_depth - 1];
+    if (!p->awake) {
+        p->awake = true;
+        ui_keep_awake(true);
+    }
+}
+
+void ui_page_no_minimize(void)
+{
+    if (s_depth > 0) s_pages[s_depth - 1].no_min = true;
+}
+
+static int app_root_index(void)
+{
+    for (int i = s_depth - 1; i >= 0; i--) {
+        if (s_pages[i].app_root) return i;
+    }
+    return -1;
+}
+
+static int task_find(const char *name)
+{
+    for (int i = 0; i < MAX_TASKS; i++) {
+        if (s_tasks[i].used && strcmp(s_tasks[i].name, name) == 0) return i;
+    }
+    return -1;
+}
+
+static void task_close_index(int i)
+{
+    task_t *t = &s_tasks[i];
+    if (!t->used) return;
+    t->used = false;
+    for (int k = t->n - 1; k >= 0; k--) {          /* close like a normal back-out */
+        if (t->pages[k].on_close) t->pages[k].on_close(t->pages[k].ctx);
+        lv_obj_delete_async(t->pages[k].scr);
+    }
+    t->n = 0;
+}
+
+void ui_task_close(const char *name)
+{
+    int i = task_find(name);
+    if (i >= 0) task_close_index(i);
+}
+
+bool ui_task_exists(const char *name) { return task_find(name) >= 0; }
+
+bool ui_minimize(void)
+{
+    int r = app_root_index();
+    if (r < 0) {
+        go_home(true);                     /* not inside an app: just go home */
+        return false;
+    }
+    for (int i = r; i < s_depth; i++) {
+        if (s_pages[i].no_min) {           /* e.g. video: close instead of running hidden */
+            go_home(true);
+            return false;
+        }
+    }
+    int slot = -1;
+    for (int i = 0; i < MAX_TASKS; i++) {
+        if (!s_tasks[i].used) { slot = i; break; }
+    }
+    if (slot < 0) {                        /* full: close the oldest minimized app */
+        slot = 0;
+        for (int i = 1; i < MAX_TASKS; i++) {
+            if (s_tasks[i].stamp < s_tasks[slot].stamp) slot = i;
+        }
+        task_close_index(slot);
+    }
+    task_t *t = &s_tasks[slot];
+    t->used = true;
+    t->n = s_depth - r;
+    t->stamp = ++s_task_seq;
+    t->lua = s_pages[r].lua;
+    strlcpy(t->name, s_pages[r].app, sizeof(t->name));
+    memcpy(t->pages, &s_pages[r], t->n * sizeof(page_t));
+    for (int k = 0; k < t->n; k++) {
+        if (t->pages[k].awake) ui_keep_awake(false);   /* hidden: let the screen sleep */
+    }
+    s_depth = r;
+    while (s_depth > 0) {                  /* pages under the app (e.g. the app list) */
+        page_t *p = &s_pages[--s_depth];
+        if (p->on_close) p->on_close(p->ctx);
+        if (p->awake) ui_keep_awake(false);
+        lv_obj_delete_async(p->scr);
+        p->scr = NULL;
+    }
+    lv_screen_load(s_home);                /* the app's screens stay alive, just hidden */
+    lv_obj_invalidate(s_home);
+    ui_home_refresh();
+    ESP_LOGI(TAG, "minimized %s (%d page%s)", t->name, t->n, t->n == 1 ? "" : "s");
+    return true;
+}
+
+static bool task_resume(const char *name)
+{
+    int i = task_find(name);
+    if (i < 0) return false;
+    if (app_root_index() >= 0) ui_minimize();     /* switching apps: park the current one */
+    else if (s_depth > 0) go_home(true);
+    task_t *t = &s_tasks[i];
+    if (s_depth + t->n > PAGE_MAX) return false;
+    memcpy(&s_pages[s_depth], t->pages, t->n * sizeof(page_t));
+    s_depth += t->n;
+    t->used = false;
+    for (int k = s_depth - t->n; k < s_depth; k++) {
+        if (s_pages[k].awake) ui_keep_awake(true);
+    }
+    page_t *top = &s_pages[s_depth - 1];
+    lv_screen_load(top->scr);
+    lv_obj_invalidate(top->scr);
+    if (top->refresh) top->refresh(top->ctx);
+    ESP_LOGI(TAG, "resumed %s", name);
+    return true;
+}
+
+void ui_app_launch(const char *name, const char *icon, bool icon_img, uint32_t color,
+                   void (*open)(void), const char *lua_id)
+{
+    ui_recents_note(name, icon, icon_img, color, open, lua_id);
+    if (task_resume(name)) return;         /* minimized: continue where it was */
+    if (lua_id) {
+        /* only one Lua app can exist: close a minimized one first */
+        for (int i = 0; i < MAX_TASKS; i++) {
+            if (s_tasks[i].used && s_tasks[i].lua) task_close_index(i);
+        }
+    }
+    strlcpy(s_launch_name, name, sizeof(s_launch_name));
+    s_launch_lua = lua_id != NULL;
+    if (lua_id) lua_app_open(lua_id);
+    else if (open) open();
+    s_launch_name[0] = '\0';              /* if open() didn't push a page */
+}
 
 /* ======================================================================== sleep / wake */
 
@@ -303,6 +501,13 @@ static void do_wake(void)
     }
 }
 
+static int app_root_index(void);
+
+static bool ui_minimize_quiet(void)
+{
+    return app_root_index() >= 0 && ui_minimize();
+}
+
 static void do_sleep(void)
 {
     if (!s_awake) {
@@ -312,7 +517,7 @@ static void do_sleep(void)
         return;
     }
     s_awake = false;
-    go_home(false);            /* instant switch: no slide animation into a dark screen */
+    if (!ui_minimize_quiet()) go_home(false);   /* apps keep running, like a phone */
     /* close leftover confirm dialogs (marked USER_4 by ui_confirm) */
     for (int i = (int)lv_obj_get_child_count(lv_layer_top()) - 1; i >= 0; i--) {
         lv_obj_t *o = lv_obj_get_child(lv_layer_top(), i);
@@ -798,9 +1003,9 @@ void ui_inject_key(const char *key)
     if (strcmp(key, "back") == 0) {
         ui_page_pop();
     } else if (strcmp(key, "home") == 0) {
-        ui_go_home();
+        ui_minimize();
     } else if (strcmp(key, "recents") == 0) {
-        ui_go_home();
+        ui_minimize();                 /* like holding "-": park the app, show the switcher */
         ui_open_recents();
     }
     ui_unlock();
@@ -939,7 +1144,7 @@ static void on_button(button_id_t id, button_event_t ev)
             }
         } else if (id == BTN_BOOT && ev == BTN_LONG) {
             if (s_depth > 0) {
-                ui_go_home();
+                ui_minimize();               /* home button: minimize the app */
             } else {
                 ui_open_recents();          /* on the watch face: recent apps */
             }

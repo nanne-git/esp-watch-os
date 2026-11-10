@@ -405,8 +405,7 @@ void ui_home_refresh(void)
 static void app_tile_cb(lv_event_t *e)
 {
     const app_def_t *a = lv_event_get_user_data(e);
-    ui_recents_note(a->name, a->icon, false, a->color, a->open, NULL);
-    a->open();
+    ui_app_launch(a->name, a->icon, false, a->color, a->open, NULL);   /* resumes if minimized */
 }
 
 /* Lua apps found on the SD card when the launcher opened */
@@ -418,8 +417,7 @@ static void lua_tile_cb(lv_event_t *e)
     int i = (int)(intptr_t)lv_event_get_user_data(e);
     if (i >= s_lua_count) return;
     lua_app_info_t *a = &s_lua_apps[i];
-    ui_recents_note(a->name, a->icon, a->icon_is_image, a->color, NULL, a->id);
-    lua_app_open(a->id);
+    ui_app_launch(a->name, a->icon, a->icon_is_image, a->color, NULL, a->id);
 }
 
 static void lua_uninstall_yes(void *user)

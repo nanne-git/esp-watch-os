@@ -328,7 +328,7 @@ static void sw_build(lv_obj_t *c, void *ctx)
     s_sw_timer = lv_timer_create(sw_update, 50, NULL);
     sw_update(NULL);
     sw_laps_update();
-    ui_keep_awake(true);
+    ui_page_keep_awake();          /* only while this page is on screen */
 }
 
 static void sw_close(void *ctx)
@@ -338,7 +338,6 @@ static void sw_close(void *ctx)
         lv_timer_delete(s_sw_timer);
         s_sw_timer = NULL;
     }
-    ui_keep_awake(false);
 }
 
 void app_stopwatch_open(void) { ui_page_push_raw("Stopwatch", sw_build, sw_close, NULL); }
